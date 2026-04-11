@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_HOME="${CODEX_DEFAULT_HOME:-$HOME/.codex}"
+PROFILES_ROOT="${CODEX_PROFILES_HOME:-$HOME/.codex-profiles}"
+CODEX_BIN="${CODEX_BIN:-codex}"
+BACKUP_DIR="$DEFAULT_HOME/backups"
+
+usage() {
+  cat <<USAGE
+codexacct - Multi-account profile manager for Codex default home
+
+Usage:
+  codexacct login <profile> [--device-auth|extra codex login flags]
+  codexacct use <profile> [--force]
+  codexacct list
+  codexacct whoami
+  codexacct status <profile>
+  codexacct logout <profile>
+  codexacct logout-default
+
+Core flow:
+  1) Save credentials per profile:  codexacct login personal
+  2) Switch active default account: codexacct use personal
+
+Notes:
+  - Default Codex App + CLI home is: $DEFAULT_HOME
+  - Profile homes are stored in:      $PROFILES_ROOT/<profile>
+  - 'use' copies <profile>/auth.json into $DEFAULT_HOME/auth.json
+USAGE
+}
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+ensure_dirs() {
+  mkdir -p "$DEFAULT_HOME" "$PROFILES_ROOT" "$BACKUP_DIR"
+}
+
+validate_profile() {
+  local profile="$1"
+  [[ "$profile" =~ ^[A-Za-z0-9._-]+$ ]] || die "Invalid profile name '$profile'. Use letters, numbers, dot, underscore, or dash."
+}
+
+profile_home() {
+  echo "$PROFILES_ROOT/$1"
+}
+
+auth_file() {
+  echo "$1/auth.json"
+}
+
+is_codex_app_running() {
+  pgrep -f "/Applications/Codex.app/Contents/MacOS/Codex" >/dev/null 2>&1
+}
+
+print_auth_summary() {
+  local auth_path="$1"
+  [ -f "$auth_path" ] || {
+    echo "auth: missing ($auth_path)"
+    return 0
+  }
+
+  node - "$auth_path" <<'NODE'
+const fs = require('fs');
+const p = process.argv[2];
+try {
+  const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const accountId = j?.tokens?.account_id || 'unknown';
+  let email = 'unknown';
+  let plan = 'unknown';
+  let org = 'unknown';
+  const id = j?.tokens?.id_token;
+  if (id && id.includes('.')) {
+    const payload = JSON.parse(Buffer.from(id.split('.')[1], 'base64url').toString('utf8'));
+    email = payload?.email || email;
+    const auth = payload?.['https://api.openai.com/auth'] || {};
+    plan = auth?.chatgpt_plan_type || plan;
+    const orgs = Array.isArray(auth?.organizations) ? auth.organizations : [];
+    const defOrg = orgs.find(o => o && o.is_default) || orgs[0];
+    if (defOrg && defOrg.title) org = defOrg.title;
+  }
+  console.log(`account_id: ${accountId}`);
+  console.log(`email: ${email}`);
+  console.log(`plan: ${plan}`);
+  console.log(`default_org: ${org}`);
+} catch (e) {
+  console.log(`auth parse error: ${e.message}`);
+}
+NODE
+}
+
+cmd_login() {
+  local profile="${1:-}"
+  shift || true
+  [ -n "$profile" ] || die "Usage: codexacct login <profile> [extra login flags]"
+  validate_profile "$profile"
+  ensure_dirs
+
+  local p_home
+  p_home="$(profile_home "$profile")"
+  mkdir -p "$p_home"
+
+  echo "Logging in profile '$profile' at: $p_home"
+  CODEX_HOME="$p_home" "$CODEX_BIN" login "$@"
+
+  echo "Profile '$profile' login complete."
+  echo "--- auth summary ($profile) ---"
+  print_auth_summary "$(auth_file "$p_home")"
+}
+
+cmd_use() {
+  local profile="${1:-}"
+  shift || true
+  [ -n "$profile" ] || die "Usage: codexacct use <profile> [--force]"
+  validate_profile "$profile"
+  ensure_dirs
+
+  local force="false"
+  if [ "${1:-}" = "--force" ]; then
+    force="true"
+  fi
+
+  local p_home src dst
+  p_home="$(profile_home "$profile")"
+  src="$(auth_file "$p_home")"
+  dst="$(auth_file "$DEFAULT_HOME")"
+
+  [ -f "$src" ] || die "Profile '$profile' has no auth.json. Run: codexacct login $profile"
+
+  if is_codex_app_running && [ "$force" != "true" ]; then
+    die "Codex App is running. Close it first, or use 'codexacct use $profile --force' if you accept in-flight risk."
+  fi
+
+  if [ -f "$dst" ]; then
+    local ts
+    ts="$(date +%Y%m%d-%H%M%S)"
+    cp "$dst" "$BACKUP_DIR/auth.$ts.json"
+    chmod 600 "$BACKUP_DIR/auth.$ts.json" || true
+    echo "Backup created: $BACKUP_DIR/auth.$ts.json"
+  fi
+
+  cp "$src" "$dst"
+  chmod 600 "$dst" || true
+
+  echo "Default profile switched to '$profile'."
+  echo "--- auth summary (default) ---"
+  print_auth_summary "$dst"
+  echo "Tip: open/restart Codex App to ensure UI/session state reflects the new default account."
+}
+
+cmd_list() {
+  ensure_dirs
+
+  local default_auth default_account
+  default_auth="$(auth_file "$DEFAULT_HOME")"
+  default_account=""
+  if [ -f "$default_auth" ]; then
+    default_account="$(node -e 'const fs=require("fs");const p=process.argv[1];try{const j=JSON.parse(fs.readFileSync(p,"utf8"));process.stdout.write(j?.tokens?.account_id||"");}catch{process.stdout.write("");}' "$default_auth")"
+  fi
+
+  echo "Default home: $DEFAULT_HOME"
+  if [ -f "$default_auth" ]; then
+    echo "Default account_id: ${default_account:-unknown}"
+  else
+    echo "Default account_id: (not logged in)"
+  fi
+  echo
+
+  local found="false"
+  for d in "$PROFILES_ROOT"/*; do
+    [ -d "$d" ] || continue
+    found="true"
+    local name a
+    name="$(basename "$d")"
+    a="$(auth_file "$d")"
+
+    local acc
+    if [ -f "$a" ]; then
+      acc="$(node -e 'const fs=require("fs");const p=process.argv[1];try{const j=JSON.parse(fs.readFileSync(p,"utf8"));process.stdout.write(j?.tokens?.account_id||"");}catch{process.stdout.write("");}' "$a")"
+      local mark=" "
+      if [ -n "$default_account" ] && [ "$acc" = "$default_account" ]; then
+        mark="*"
+      fi
+      echo "[$mark] $name"
+      print_auth_summary "$a" | sed 's/^/    /'
+    else
+      echo "[ ] $name"
+      echo "    auth: missing"
+    fi
+    echo
+  done
+
+  if [ "$found" = "false" ]; then
+    echo "No profiles yet. Create one with: codexacct login <profile>"
+  fi
+
+  echo "Legend: '*' means same account_id as current default ~/.codex/auth.json"
+}
+
+cmd_whoami() {
+  ensure_dirs
+  local d_auth
+  d_auth="$(auth_file "$DEFAULT_HOME")"
+  echo "Default home: $DEFAULT_HOME"
+  "$CODEX_BIN" login status || true
+  echo "--- auth summary (default) ---"
+  print_auth_summary "$d_auth"
+}
+
+cmd_status() {
+  local profile="${1:-}"
+  [ -n "$profile" ] || die "Usage: codexacct status <profile>"
+  validate_profile "$profile"
+
+  local p_home
+  p_home="$(profile_home "$profile")"
+  [ -d "$p_home" ] || die "Profile '$profile' does not exist"
+
+  CODEX_HOME="$p_home" "$CODEX_BIN" login status || true
+  echo "--- auth summary ($profile) ---"
+  print_auth_summary "$(auth_file "$p_home")"
+}
+
+cmd_logout() {
+  local profile="${1:-}"
+  [ -n "$profile" ] || die "Usage: codexacct logout <profile>"
+  validate_profile "$profile"
+  local p_home
+  p_home="$(profile_home "$profile")"
+  [ -d "$p_home" ] || die "Profile '$profile' does not exist"
+  CODEX_HOME="$p_home" "$CODEX_BIN" logout || true
+  echo "Logged out profile '$profile'"
+}
+
+cmd_logout_default() {
+  "$CODEX_BIN" logout || true
+  echo "Logged out default profile ($DEFAULT_HOME)"
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "$cmd" in
+    login) cmd_login "$@" ;;
+    use) cmd_use "$@" ;;
+    list) cmd_list ;;
+    whoami) cmd_whoami ;;
+    status) cmd_status "$@" ;;
+    logout) cmd_logout "$@" ;;
+    logout-default) cmd_logout_default ;;
+    help|-h|--help) usage ;;
+    *) die "Unknown command '$cmd'. Run: codexacct help" ;;
+  esac
+}
+
+main "$@"
