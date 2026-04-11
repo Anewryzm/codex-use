@@ -14,9 +14,17 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `tools/codexacct use personal`
 - `tools/codexacct use trabajo`
 
+3. Ver usage/rate limits por perfil (estilo CodexBar, vía RPC):
+- `tools/codexacct usage default`
+- `tools/codexacct usage trabajo`
+- `tools/codexacct usage trabajo --json`
+- `tools/codexacct limits trabajo --refresh`
+
 ## Comandos disponibles
 - `tools/codexacct login <profile>`
 - `tools/codexacct use <profile> [--force]`
+- `tools/codexacct usage [profile|default] [--json] [--refresh]`
+- `tools/codexacct limits [profile|default] [--json] [--refresh]`
 - `tools/codexacct list`
 - `tools/codexacct whoami`
 - `tools/codexacct status <profile>`
@@ -27,3 +35,4 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `use` crea backup automático de `~/.codex/auth.json` en `~/.codex/backups/`.
 - Evita cambiar cuenta con tareas activas en Codex App.
 - `--force` existe para casos avanzados y puede interrumpir sesiones en curso.
+- `usage/limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).

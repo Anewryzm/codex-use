@@ -13,6 +13,8 @@ codexacct - Multi-account profile manager for Codex default home
 Usage:
   codexacct login <profile> [--device-auth|extra codex login flags]
   codexacct use <profile> [--force]
+  codexacct usage [profile|default] [--json] [--refresh]
+  codexacct limits [profile|default] [--json] [--refresh]
   codexacct list
   codexacct whoami
   codexacct status <profile>
@@ -22,11 +24,13 @@ Usage:
 Core flow:
   1) Save credentials per profile:  codexacct login personal
   2) Switch active default account: codexacct use personal
+  3) Check usage/rate limits:       codexacct usage default
 
 Notes:
   - Default Codex App + CLI home is: $DEFAULT_HOME
   - Profile homes are stored in:      $PROFILES_ROOT/<profile>
   - 'use' copies <profile>/auth.json into $DEFAULT_HOME/auth.json
+  - 'usage' uses Codex app-server RPC (account/read + account/rateLimits/read)
 USAGE
 }
 
@@ -92,6 +96,174 @@ try {
 NODE
 }
 
+fetch_usage_via_rpc() {
+  local target_home="$1"
+  local json_mode="$2"
+  local refresh_mode="$3"
+
+  CODEX_HOME="$target_home" node - "$CODEX_BIN" "$json_mode" "$refresh_mode" <<'NODE'
+const { spawn } = require('child_process');
+
+const codexBin = process.argv[2] || 'codex';
+const jsonMode = process.argv[3] === 'true';
+const refreshMode = process.argv[4] === 'true';
+
+const child = spawn(codexBin, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] });
+let buf = '';
+let settled = false;
+let seq = 1;
+const pending = new Map();
+
+function done(code) {
+  if (settled) return;
+  settled = true;
+  try { child.kill('SIGTERM'); } catch {}
+  setTimeout(() => process.exit(code), 80);
+}
+
+function send(method, params) {
+  const id = seq++;
+  const msg = { jsonrpc: '2.0', id, method };
+  if (params !== undefined) msg.params = params;
+  child.stdin.write(JSON.stringify(msg) + '\n');
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`timeout for ${method}`));
+    }, 12000);
+    pending.set(id, { resolve, reject, t });
+  });
+}
+
+child.stderr.on('data', (d) => {
+  const s = d.toString('utf8').trim();
+  if (!s) return;
+  if (/ERROR|failed to fetch codex rate limits|not logged in/i.test(s)) {
+    process.stderr.write(s + '\n');
+  }
+});
+
+child.stdout.on('data', (chunk) => {
+  buf += chunk.toString('utf8');
+  let idx;
+  while ((idx = buf.indexOf('\n')) >= 0) {
+    const line = buf.slice(0, idx).trim();
+    buf = buf.slice(idx + 1);
+    if (!line) continue;
+
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (msg.id != null && pending.has(msg.id)) {
+      const p = pending.get(msg.id);
+      clearTimeout(p.t);
+      pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error?.message || JSON.stringify(msg.error)));
+      else p.resolve(msg.result);
+    }
+  }
+});
+
+child.on('error', (err) => {
+  console.error(`RPC spawn error: ${err.message}`);
+  done(1);
+});
+
+function windowLabel(minutes) {
+  if (minutes === 300) return '5h';
+  if (minutes === 10080) return 'weekly';
+  if (typeof minutes === 'number') return `${minutes}m`;
+  return 'window';
+}
+
+function resetText(epochSeconds) {
+  if (epochSeconds == null) return 'unknown';
+  const d = new Date(epochSeconds * 1000);
+  return d.toLocaleString();
+}
+
+(async () => {
+  try {
+    const init = await send('initialize', {
+      clientInfo: { name: 'codexacct', version: '0.2.0' },
+    });
+
+    const accountResp = await send('account/read', { forceRefresh: refreshMode });
+    const limitsResp = await send('account/rateLimits/read');
+
+    const account = accountResp?.account || null;
+    const snapshot = (limitsResp?.rateLimitsByLimitId && (limitsResp.rateLimitsByLimitId.codex || Object.values(limitsResp.rateLimitsByLimitId)[0]))
+      || limitsResp?.rateLimits
+      || null;
+
+    if (!snapshot) {
+      throw new Error('No rate limit snapshot returned by app-server');
+    }
+
+    const out = {
+      codexHome: init?.codexHome || null,
+      account,
+      requiresOpenaiAuth: !!accountResp?.requiresOpenaiAuth,
+      rateLimits: snapshot,
+      rateLimitsByLimitId: limitsResp?.rateLimitsByLimitId || null,
+    };
+
+    if (jsonMode) {
+      console.log(JSON.stringify(out, null, 2));
+      done(0);
+      return;
+    }
+
+    const email = account?.email || 'unknown';
+    const plan = account?.planType || snapshot?.planType || 'unknown';
+    const primary = snapshot?.primary || null;
+    const secondary = snapshot?.secondary || null;
+    const credits = snapshot?.credits || null;
+
+    console.log(`email: ${email}`);
+    console.log(`plan: ${plan}`);
+
+    if (primary) {
+      const used = Number(primary.usedPercent ?? 0);
+      const rem = Math.max(0, 100 - used);
+      console.log(`${windowLabel(primary.windowDurationMins)} used: ${used}%`);
+      console.log(`${windowLabel(primary.windowDurationMins)} remaining: ${rem}%`);
+      console.log(`${windowLabel(primary.windowDurationMins)} resets_at: ${resetText(primary.resetsAt)}`);
+    } else {
+      console.log('primary window: unavailable');
+    }
+
+    if (secondary) {
+      const used = Number(secondary.usedPercent ?? 0);
+      const rem = Math.max(0, 100 - used);
+      console.log(`${windowLabel(secondary.windowDurationMins)} used: ${used}%`);
+      console.log(`${windowLabel(secondary.windowDurationMins)} remaining: ${rem}%`);
+      console.log(`${windowLabel(secondary.windowDurationMins)} resets_at: ${resetText(secondary.resetsAt)}`);
+    } else {
+      console.log('secondary window: unavailable');
+    }
+
+    if (credits) {
+      console.log(`credits.hasCredits: ${credits.hasCredits}`);
+      console.log(`credits.unlimited: ${credits.unlimited}`);
+      console.log(`credits.balance: ${credits.balance == null ? 'null' : credits.balance}`);
+    } else {
+      console.log('credits: unavailable');
+    }
+
+    done(0);
+  } catch (err) {
+    console.error(`RPC usage probe failed: ${err.message}`);
+    done(1);
+  }
+})();
+NODE
+}
+
 cmd_login() {
   local profile="${1:-}"
   shift || true
@@ -149,6 +321,68 @@ cmd_use() {
   echo "--- auth summary (default) ---"
   print_auth_summary "$dst"
   echo "Tip: open/restart Codex App to ensure UI/session state reflects the new default account."
+}
+
+cmd_usage() {
+  ensure_dirs
+
+  local profile="default"
+  local json_mode="false"
+  local refresh_mode="false"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json)
+        json_mode="true"
+        ;;
+      --refresh)
+        refresh_mode="true"
+        ;;
+      default)
+        profile="default"
+        ;;
+      -h|--help)
+        echo "Usage: codexacct usage [profile|default] [--json] [--refresh]"
+        echo "Examples:"
+        echo "  codexacct usage"
+        echo "  codexacct usage trabajo"
+        echo "  codexacct usage default --json"
+        return 0
+        ;;
+      *)
+        if [ "$profile" != "default" ]; then
+          die "Only one profile argument is allowed."
+        fi
+        profile="$1"
+        ;;
+    esac
+    shift
+  done
+
+  local target_home label
+  if [ "$profile" = "default" ]; then
+    target_home="$DEFAULT_HOME"
+    label="default"
+  else
+    validate_profile "$profile"
+    target_home="$(profile_home "$profile")"
+    [ -d "$target_home" ] || die "Profile '$profile' does not exist"
+    label="$profile"
+  fi
+
+  [ -f "$(auth_file "$target_home")" ] || die "No auth.json found for '$label' at $target_home"
+
+  if [ "$json_mode" != "true" ]; then
+    echo "Usage source: codex app-server RPC"
+    echo "Target profile: $label"
+    echo "CODEX_HOME: $target_home"
+    if [ "$refresh_mode" = "true" ]; then
+      echo "Mode: force refresh enabled"
+    fi
+    echo
+  fi
+
+  fetch_usage_via_rpc "$target_home" "$json_mode" "$refresh_mode"
 }
 
 cmd_list() {
@@ -246,6 +480,7 @@ main() {
   case "$cmd" in
     login) cmd_login "$@" ;;
     use) cmd_use "$@" ;;
+    usage|limits) cmd_usage "$@" ;;
     list) cmd_list ;;
     whoami) cmd_whoami ;;
     status) cmd_status "$@" ;;
