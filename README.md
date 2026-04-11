@@ -19,12 +19,13 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `tools/codexacct usage trabajo`
 - `tools/codexacct usage trabajo --json`
 - `tools/codexacct limits trabajo --refresh`
+- `tools/codexacct usage --all` (tabla ASCII de todas las cuentas vinculadas)
 
 ## Comandos disponibles
 - `tools/codexacct login <profile>`
 - `tools/codexacct use <profile> [--force]`
-- `tools/codexacct usage [profile|default] [--json] [--refresh]`
-- `tools/codexacct limits [profile|default] [--json] [--refresh]`
+- `tools/codexacct usage [profile|default] [--all] [--json] [--refresh]`
+- `tools/codexacct limits [profile|default] [--all] [--json] [--refresh]`
 - `tools/codexacct list`
 - `tools/codexacct whoami`
 - `tools/codexacct status <profile>`

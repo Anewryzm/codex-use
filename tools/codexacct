@@ -13,8 +13,8 @@ codexacct - Multi-account profile manager for Codex default home
 Usage:
   codexacct login <profile> [--device-auth|extra codex login flags]
   codexacct use <profile> [--force]
-  codexacct usage [profile|default] [--json] [--refresh]
-  codexacct limits [profile|default] [--json] [--refresh]
+  codexacct usage [profile|default] [--all] [--json] [--refresh]
+  codexacct limits [profile|default] [--all] [--json] [--refresh]
   codexacct list
   codexacct whoami
   codexacct status <profile>
@@ -25,6 +25,7 @@ Core flow:
   1) Save credentials per profile:  codexacct login personal
   2) Switch active default account: codexacct use personal
   3) Check usage/rate limits:       codexacct usage default
+  4) Compare all profiles:          codexacct usage --all
 
 Notes:
   - Default Codex App + CLI home is: $DEFAULT_HOME
@@ -264,6 +265,115 @@ function resetText(epochSeconds) {
 NODE
 }
 
+collect_usage_targets() {
+  echo "default|$DEFAULT_HOME"
+  for d in "$PROFILES_ROOT"/*; do
+    [ -d "$d" ] || continue
+    local name
+    name="$(basename "$d")"
+    echo "$name|$d"
+  done
+}
+
+json_usage_to_tsv() {
+  node -e '
+const fs = require("fs");
+const raw = fs.readFileSync(0, "utf8");
+const data = JSON.parse(raw);
+const r = data?.rateLimits || {};
+const p = r?.primary || null;
+const s = r?.secondary || null;
+const email = data?.account?.email || "unknown";
+const plan = data?.account?.planType || r?.planType || "unknown";
+
+function pct(value) {
+  return (typeof value === "number") ? `${value}%` : "-";
+}
+
+function rem(value) {
+  return (typeof value === "number") ? `${Math.max(0, 100 - value)}%` : "-";
+}
+
+function reset(epochSeconds) {
+  if (epochSeconds == null) return "-";
+  const d = new Date(epochSeconds * 1000);
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = t => parts.find(p => p.type === t)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+const row = [
+  email,
+  plan,
+  pct(p?.usedPercent),
+  rem(p?.usedPercent),
+  reset(p?.resetsAt),
+  pct(s?.usedPercent),
+  rem(s?.usedPercent),
+  reset(s?.resetsAt),
+];
+
+process.stdout.write(row.join("\t"));
+'
+}
+
+crop_cell() {
+  local text="$1"
+  local width="$2"
+  if [ "${#text}" -le "$width" ]; then
+    printf "%s" "$text"
+    return 0
+  fi
+  if [ "$width" -le 3 ]; then
+    printf "%s" "${text:0:$width}"
+    return 0
+  fi
+  printf "%s..." "${text:0:$((width-3))}"
+}
+
+print_usage_table_header() {
+  printf '+--------------+--------------------------------+----------+----------+----------+-------------------+----------+----------+-------------------+------------------+\n'
+  printf '| %-12s | %-30s | %-8s | %-8s | %-8s | %-17s | %-8s | %-8s | %-17s | %-16s |\n' \
+    "profile" "email" "plan" "5h_used" "5h_left" "5h_reset" "wk_used" "wk_left" "wk_reset" "status"
+  printf '+--------------+--------------------------------+----------+----------+----------+-------------------+----------+----------+-------------------+------------------+\n'
+}
+
+print_usage_table_row() {
+  local profile="$1"
+  local email="$2"
+  local plan="$3"
+  local p_used="$4"
+  local p_left="$5"
+  local p_reset="$6"
+  local s_used="$7"
+  local s_left="$8"
+  local s_reset="$9"
+  local status="${10}"
+
+  printf '| %-12s | %-30s | %-8s | %-8s | %-8s | %-17s | %-8s | %-8s | %-17s | %-16s |\n' \
+    "$(crop_cell "$profile" 12)" \
+    "$(crop_cell "$email" 30)" \
+    "$(crop_cell "$plan" 8)" \
+    "$(crop_cell "$p_used" 8)" \
+    "$(crop_cell "$p_left" 8)" \
+    "$(crop_cell "$p_reset" 17)" \
+    "$(crop_cell "$s_used" 8)" \
+    "$(crop_cell "$s_left" 8)" \
+    "$(crop_cell "$s_reset" 17)" \
+    "$(crop_cell "$status" 16)"
+}
+
+print_usage_table_footer() {
+  printf '+--------------+--------------------------------+----------+----------+----------+-------------------+----------+----------+-------------------+------------------+\n'
+}
+
 cmd_login() {
   local profile="${1:-}"
   shift || true
@@ -329,9 +439,14 @@ cmd_usage() {
   local profile="default"
   local json_mode="false"
   local refresh_mode="false"
+  local all_mode="false"
+  local profile_set="false"
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --all)
+        all_mode="true"
+        ;;
       --json)
         json_mode="true"
         ;;
@@ -340,24 +455,85 @@ cmd_usage() {
         ;;
       default)
         profile="default"
+        profile_set="true"
         ;;
       -h|--help)
-        echo "Usage: codexacct usage [profile|default] [--json] [--refresh]"
+        echo "Usage: codexacct usage [profile|default] [--all] [--json] [--refresh]"
         echo "Examples:"
         echo "  codexacct usage"
         echo "  codexacct usage trabajo"
         echo "  codexacct usage default --json"
+        echo "  codexacct usage --all"
         return 0
         ;;
       *)
-        if [ "$profile" != "default" ]; then
+        if [[ "$1" == --* ]]; then
+          die "Unknown option '$1'"
+        fi
+        if [ "$profile_set" = "true" ]; then
           die "Only one profile argument is allowed."
         fi
         profile="$1"
+        profile_set="true"
         ;;
     esac
     shift
   done
+
+  if [ "$all_mode" = "true" ]; then
+    [ "$json_mode" != "true" ] || die "--all does not support --json yet."
+    [ "$profile_set" != "true" ] || die "Do not pass profile/default with --all."
+
+    echo "Usage source: codex app-server RPC"
+    echo "Target profile: all"
+    echo "Profiles root: $PROFILES_ROOT"
+    if [ "$refresh_mode" = "true" ]; then
+      echo "Mode: force refresh enabled"
+    fi
+    echo
+
+    print_usage_table_header
+    while IFS='|' read -r label target_home; do
+      [ -n "$label" ] || continue
+
+      local target_auth
+      target_auth="$(auth_file "$target_home")"
+      if [ ! -f "$target_auth" ]; then
+        print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "-" "-" "no-auth"
+        continue
+      fi
+
+      local rpc_json rpc_err tsv err_file
+      err_file="$(mktemp)"
+      if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+        if tsv="$(printf "%s" "$rpc_json" | json_usage_to_tsv 2>/dev/null)"; then
+          local email plan p_used p_left p_reset s_used s_left s_reset
+          IFS=$'\t' read -r email plan p_used p_left p_reset s_used s_left s_reset <<<"$tsv"
+          print_usage_table_row "$label" "$email" "$plan" "$p_used" "$p_left" "$p_reset" "$s_used" "$s_left" "$s_reset" "ok"
+        else
+          print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "-" "-" "parse-error"
+        fi
+      else
+        rpc_err="$(cat "$err_file")"
+        rpc_err="$(echo "$rpc_err" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+        local err_lc status
+        err_lc="$(printf "%s" "$rpc_err" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]]; then
+          status="not-logged"
+        elif [[ "$err_lc" == *"no rate limit snapshot"* ]]; then
+          status="no-limits"
+        elif [[ "$err_lc" == *"timeout"* ]]; then
+          status="timeout"
+        else
+          status="rpc-error"
+        fi
+        print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "-" "-" "$status"
+      fi
+      rm -f "$err_file"
+    done < <(collect_usage_targets)
+    print_usage_table_footer
+    return 0
+  fi
 
   local target_home label
   if [ "$profile" = "default" ]; then
