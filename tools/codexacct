@@ -190,8 +190,20 @@ function windowLabel(minutes) {
 
 function resetText(epochSeconds) {
   if (epochSeconds == null) return 'unknown';
-  const d = new Date(epochSeconds * 1000);
-  return d.toLocaleString();
+  const nowMs = Date.now();
+  const targetMs = epochSeconds * 1000;
+  const deltaMs = targetMs - nowMs;
+  const absMs = Math.abs(deltaMs);
+  const mins = Math.floor(absMs / 60000);
+  const days = Math.floor(mins / (60 * 24));
+  const hours = Math.floor((mins % (60 * 24)) / 60);
+  const minutes = mins % 60;
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+  const relative = parts.slice(0, 2).join(' ');
+  return deltaMs >= 0 ? `in ${relative}` : `${relative} ago`;
 }
 
 (async () => {
@@ -240,7 +252,7 @@ function resetText(epochSeconds) {
       const rem = Math.max(0, 100 - used);
       console.log(`${windowLabel(primary.windowDurationMins)} used: ${used}%`);
       console.log(`${windowLabel(primary.windowDurationMins)} remaining: ${rem}%`);
-      console.log(`${windowLabel(primary.windowDurationMins)} resets_at: ${resetText(primary.resetsAt)}`);
+      console.log(`${windowLabel(primary.windowDurationMins)} resets_in: ${resetText(primary.resetsAt)}`);
     } else {
       console.log('primary window: unavailable');
     }
@@ -250,7 +262,7 @@ function resetText(epochSeconds) {
       const rem = Math.max(0, 100 - used);
       console.log(`${windowLabel(secondary.windowDurationMins)} used: ${used}%`);
       console.log(`${windowLabel(secondary.windowDurationMins)} remaining: ${rem}%`);
-      console.log(`${windowLabel(secondary.windowDurationMins)} resets_at: ${resetText(secondary.resetsAt)}`);
+      console.log(`${windowLabel(secondary.windowDurationMins)} resets_in: ${resetText(secondary.resetsAt)}`);
     } else {
       console.log('secondary window: unavailable');
     }
@@ -293,36 +305,33 @@ const s = r?.secondary || null;
 const email = data?.account?.email || "unknown";
 const plan = data?.account?.planType || r?.planType || "unknown";
 
-function pct(value) {
-  return (typeof value === "number") ? `${value}%` : "-";
-}
-
 function rem(value) {
   return (typeof value === "number") ? `${Math.max(0, 100 - value)}%` : "-";
 }
 
 function reset(epochSeconds) {
   if (epochSeconds == null) return "-";
-  const d = new Date(epochSeconds * 1000);
-  const parts = new Intl.DateTimeFormat("sv-SE", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(d);
-  const get = t => parts.find(p => p.type === t)?.value ?? "00";
-  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+  const nowMs = Date.now();
+  const targetMs = epochSeconds * 1000;
+  const deltaMs = targetMs - nowMs;
+  const absMs = Math.abs(deltaMs);
+  const mins = Math.floor(absMs / 60000);
+  const days = Math.floor(mins / (60 * 24));
+  const hours = Math.floor((mins % (60 * 24)) / 60);
+  const minutes = mins % 60;
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+  const relative = parts.slice(0, 2).join(" ");
+  return deltaMs >= 0 ? `in ${relative}` : `${relative} ago`;
 }
 
 const row = [
   email,
   plan,
-  pct(p?.usedPercent),
   rem(p?.usedPercent),
   reset(p?.resetsAt),
-  pct(s?.usedPercent),
   rem(s?.usedPercent),
   reset(s?.resetsAt),
 ];
@@ -346,39 +355,35 @@ crop_cell() {
 }
 
 print_usage_table_header() {
-  printf '+--------------+--------------------------------+----------+----------+----------+-------------------+----------+----------+-------------------+------------------+\n'
-  printf '| %-12s | %-30s | %-8s | %-8s | %-8s | %-17s | %-8s | %-8s | %-17s | %-16s |\n' \
-    "profile" "email" "plan" "5h_used" "5h_left" "5h_reset" "wk_used" "wk_left" "wk_reset" "status"
-  printf '+--------------+--------------------------------+----------+----------+----------+-------------------+----------+----------+-------------------+------------------+\n'
+  printf '+--------------+--------------------------------+----------+----------+-------------------+----------+-------------------+------------------+\n'
+  printf '| %-12s | %-30s | %-8s | %-8s | %-17s | %-8s | %-17s | %-16s |\n' \
+    "profile" "email" "plan" "5h_left" "5h_reset" "wk_left" "wk_reset" "status"
+  printf '+--------------+--------------------------------+----------+----------+-------------------+----------+-------------------+------------------+\n'
 }
 
 print_usage_table_row() {
   local profile="$1"
   local email="$2"
   local plan="$3"
-  local p_used="$4"
-  local p_left="$5"
-  local p_reset="$6"
-  local s_used="$7"
-  local s_left="$8"
-  local s_reset="$9"
-  local status="${10}"
+  local p_left="$4"
+  local p_reset="$5"
+  local s_left="$6"
+  local s_reset="$7"
+  local status="$8"
 
-  printf '| %-12s | %-30s | %-8s | %-8s | %-8s | %-17s | %-8s | %-8s | %-17s | %-16s |\n' \
+  printf '| %-12s | %-30s | %-8s | %-8s | %-17s | %-8s | %-17s | %-16s |\n' \
     "$(crop_cell "$profile" 12)" \
     "$(crop_cell "$email" 30)" \
     "$(crop_cell "$plan" 8)" \
-    "$(crop_cell "$p_used" 8)" \
     "$(crop_cell "$p_left" 8)" \
     "$(crop_cell "$p_reset" 17)" \
-    "$(crop_cell "$s_used" 8)" \
     "$(crop_cell "$s_left" 8)" \
     "$(crop_cell "$s_reset" 17)" \
     "$(crop_cell "$status" 16)"
 }
 
 print_usage_table_footer() {
-  printf '+--------------+--------------------------------+----------+----------+----------+-------------------+----------+----------+-------------------+------------------+\n'
+  printf '+--------------+--------------------------------+----------+----------+-------------------+----------+-------------------+------------------+\n'
 }
 
 cmd_login() {
@@ -506,7 +511,7 @@ cmd_usage() {
       local target_auth
       target_auth="$(auth_file "$target_home")"
       if [ ! -f "$target_auth" ]; then
-        print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "-" "-" "no-auth"
+        print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "no-auth"
         continue
       fi
 
@@ -514,11 +519,11 @@ cmd_usage() {
       err_file="$(mktemp)"
       if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
         if tsv="$(printf "%s" "$rpc_json" | json_usage_to_tsv 2>/dev/null)"; then
-          local email plan p_used p_left p_reset s_used s_left s_reset
-          IFS=$'\t' read -r email plan p_used p_left p_reset s_used s_left s_reset <<<"$tsv"
-          print_usage_table_row "$label" "$email" "$plan" "$p_used" "$p_left" "$p_reset" "$s_used" "$s_left" "$s_reset" "ok"
+          local email plan p_left p_reset s_left s_reset
+          IFS=$'\t' read -r email plan p_left p_reset s_left s_reset <<<"$tsv"
+          print_usage_table_row "$label" "$email" "$plan" "$p_left" "$p_reset" "$s_left" "$s_reset" "ok"
         else
-          print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "-" "-" "parse-error"
+          print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "parse-error"
         fi
       else
         rpc_err="$(cat "$err_file")"
@@ -534,7 +539,7 @@ cmd_usage() {
         else
           status="rpc-error"
         fi
-        print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "-" "-" "$status"
+        print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "$status"
       fi
       rm -f "$err_file"
     done < <(collect_usage_targets)
