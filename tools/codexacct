@@ -273,6 +273,49 @@ try {
 NODE
 }
 
+print_auth_summary_whoami() {
+  local auth_path="$1"
+  [ -f "$auth_path" ] || {
+    echo "auth: missing ($auth_path)"
+    return 0
+  }
+
+  node - "$auth_path" <<'NODE'
+const fs = require('fs');
+const p = process.argv[2];
+try {
+  const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const accountId = j?.tokens?.account_id || 'unknown';
+  let email = 'unknown';
+  let plan = 'unknown';
+  let org = 'unknown';
+  const supportsColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+  const yellow = '\x1b[33m';
+  const reset = '\x1b[0m';
+  const id = j?.tokens?.id_token;
+  if (id && id.includes('.')) {
+    const payload = JSON.parse(Buffer.from(id.split('.')[1], 'base64url').toString('utf8'));
+    email = payload?.email || email;
+    const auth = payload?.['https://api.openai.com/auth'] || {};
+    plan = auth?.chatgpt_plan_type || plan;
+    const orgs = Array.isArray(auth?.organizations) ? auth.organizations : [];
+    const defOrg = orgs.find(o => o && o.is_default) || orgs[0];
+    if (defOrg && defOrg.title) org = defOrg.title;
+  }
+  console.log(`plan: ${plan}`);
+  console.log(`default_org: ${org}`);
+  if (supportsColor) {
+    console.log(`email: ${yellow}${email}${reset}`);
+  } else {
+    console.log(`email: ${email}`);
+  }
+  console.log(`account_id: ${accountId}`);
+} catch (e) {
+  console.log(`auth parse error: ${e.message}`);
+}
+NODE
+}
+
 fetch_usage_via_rpc() {
   local target_home="$1"
   local json_mode="$2"
@@ -827,14 +870,19 @@ cmd_list() {
 
 cmd_whoami() {
   ensure_dirs
-  local d_auth active_profile
+  local d_auth active_profile login_status
   d_auth="$(auth_file "$DEFAULT_HOME")"
   active_profile="$(detect_active_profile)"
-  echo "Default home: $(color_gray "$DEFAULT_HOME")"
+  login_status="$("$CODEX_BIN" login status 2>&1 || true)"
+  login_status="$(printf '%s\n' "$login_status" | sed '/^WARNING: proceeding, even though we could not update PATH:/d')"
+  if [ -n "$(printf '%s' "$login_status" | tr -d '[:space:]')" ]; then
+    printf '%s\n' "$login_status"
+  fi
   echo "$(color_green "Active profile: ")$(color_green_bold "$active_profile")"
-  "$CODEX_BIN" login status || true
+  echo "Default home: $(color_gray "$DEFAULT_HOME")"
+  echo
   echo "--- auth summary (default) ---"
-  print_auth_summary "$d_auth"
+  print_auth_summary_whoami "$d_auth"
 }
 
 cmd_status() {
