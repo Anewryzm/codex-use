@@ -1113,11 +1113,11 @@ for (const m of models) {
     m.model || "unknown",
     String(m.sessions || 0),
     toM(m.input),
-    toM(m.cached),
     toM(m.outputWithReasoning),
+    toM(m.cached),
     toCost(costInput),
-    toCost(costCached),
     toCost(costOutput),
+    toCost(costCached),
     toCost(costTotal),
   ]);
 }
@@ -1128,11 +1128,11 @@ rows.push([
   "TOTAL",
   String(totalSessionsDisplay || totals.sessions || 0),
   toM(totals.input),
-  toM(totals.cached),
   toM(totals.outputWithReasoning),
+  toM(totals.cached),
   toCost(totalCostInput),
-  toCost(totalCostCached),
   toCost(totalCostOutput),
+  toCost(totalCostCached),
   toCost(totalCostAll),
   toCost(totalCostInOut),
 ]);
@@ -1146,7 +1146,7 @@ for (const r of rows) {
 print_historical_usage_table_header() {
   printf '+---------------+------+----------+----------+----------+\n'
   printf '| %-13s | %-4s | %-8s | %-8s | %-8s |\n' \
-    "model" "ses" "in(M)" "cach(M)" "out(M)"
+    "model" "ses" "in(M)" "out(M)" "cache(M)"
   printf '+---------------+------+----------+----------+----------+\n'
 }
 
@@ -1154,14 +1154,14 @@ print_historical_usage_table_row() {
   local model="$1"
   local sessions="$2"
   local input_m="$3"
-  local cached_m="$4"
-  local output_m="$5"
+  local output_m="$4"
+  local cache_m="$5"
   printf '| %-13s | %-4s | %-8s | %-8s | %-8s |\n' \
     "$(crop_cell "$model" 13)" \
     "$(crop_cell "$sessions" 4)" \
     "$(crop_cell "$input_m" 8)" \
-    "$(crop_cell "$cached_m" 8)" \
-    "$(crop_cell "$output_m" 8)"
+    "$(crop_cell "$output_m" 8)" \
+    "$(crop_cell "$cache_m" 8)"
 }
 
 print_historical_usage_table_footer() {
@@ -1210,35 +1210,35 @@ print_historical_usage_table() {
   fi
 
   print_historical_usage_table_header
-  local total_sessions="" total_input="" total_cached="" total_output=""
-  local total_cost_input="" total_cost_cached="" total_cost_output="" total_cost_all="" total_cost_inout=""
-  while IFS=$'\t' read -r model sessions input_m cached_m output_m cost_in cost_cached cost_out cost_total cost_inout; do
+  local total_sessions="" total_input="" total_output="" total_cache=""
+  local total_cost_input="" total_cost_output="" total_cost_cache="" total_cost_all="" total_cost_inout=""
+  while IFS=$'\t' read -r model sessions input_m output_m cache_m cost_in cost_out cost_cache cost_total cost_inout; do
     [ -n "$model" ] || continue
     if [ "$model" = "TOTAL" ]; then
       total_sessions="$sessions"
       total_input="$input_m"
-      total_cached="$cached_m"
       total_output="$output_m"
+      total_cache="$cache_m"
       total_cost_input="$cost_in"
-      total_cost_cached="$cost_cached"
       total_cost_output="$cost_out"
+      total_cost_cache="$cost_cache"
       total_cost_all="$cost_total"
       total_cost_inout="$cost_inout"
       continue
     fi
-    print_historical_usage_table_row "$model" "$sessions" "$input_m" "$cached_m" "$output_m"
-    print_historical_usage_table_row "" "" "$cost_in" "$cost_cached" "$cost_out"
+    print_historical_usage_table_row "$model" "$sessions" "$input_m" "$output_m" "$cache_m"
+    print_historical_usage_table_row "" "" "$cost_in" "$cost_out" "$cost_cache"
     print_historical_usage_table_blank_row
   done <<< "$usage_rows"
 
   if [ -n "$total_sessions" ]; then
     print_historical_usage_table_footer
-    print_historical_usage_table_row "" "$total_sessions" "$total_input" "$total_cached" "$total_output"
+    print_historical_usage_table_row "" "$total_sessions" "$total_input" "$total_output" "$total_cache"
   fi
   print_historical_usage_table_footer
-  if [ -n "$total_cached" ]; then
-    print_historical_usage_token_summary_row "Total Token Usage" "${total_io_m:-"-"}" "$total_cached"
-    print_historical_usage_token_summary_row "Total Token Cost" "${total_cost_inout:-"-"}" "${total_cost_cached:-"-"}"
+  if [ -n "$total_cache" ]; then
+    print_historical_usage_token_summary_row "Total Token Usage" "${total_io_m:-"-"}" "$total_cache"
+    print_historical_usage_token_summary_row "Total Token Cost" "${total_cost_inout:-"-"}" "${total_cost_cache:-"-"}"
     if [ -n "$total_cost_all" ]; then
       echo "Total Token Cost: $total_cost_all"
     fi
@@ -1298,18 +1298,18 @@ for (const [model, v] of Object.entries(overrides)) {
 const ordered = Object.keys(effective).sort((a, b) => a.localeCompare(b));
 const lines = [];
 lines.push(`Pricing file: ${pricingPath}`);
-lines.push('+---------------+----------+----------+----------+');
-lines.push('| model         | in($/M)  | cach($/M)| out($/M) |');
-lines.push('+---------------+----------+----------+----------+');
+lines.push('+---------------+------------+------------+------------+');
+lines.push('| model         | in($/M)    | out($/M)   | cache($/M) |');
+lines.push('+---------------+------------+------------+------------+');
 for (const model of ordered) {
   const p = effective[model] || {};
-  const i = Number.isFinite(p.input) ? p.input.toFixed(3).replace(/\.?0+$/, '') : 'n/a';
-  const c = Number.isFinite(p.cached) ? p.cached.toFixed(3).replace(/\.?0+$/, '') : 'n/a';
-  const o = Number.isFinite(p.output) ? p.output.toFixed(3).replace(/\.?0+$/, '') : 'n/a';
-  const row = `| ${model.padEnd(13)} | ${i.padEnd(8)} | ${c.padEnd(8)} | ${o.padEnd(8)} |`;
+  const i = Number.isFinite(p.input) ? `$${p.input.toFixed(3).replace(/\.?0+$/, '')}` : 'n/a';
+  const o = Number.isFinite(p.output) ? `$${p.output.toFixed(3).replace(/\.?0+$/, '')}` : 'n/a';
+  const c = Number.isFinite(p.cached) ? `$${p.cached.toFixed(3).replace(/\.?0+$/, '')}` : 'n/a';
+  const row = `| ${model.padEnd(13)} | ${i.padEnd(10)} | ${o.padEnd(10)} | ${c.padEnd(10)} |`;
   lines.push(row);
 }
-lines.push('+---------------+----------+----------+----------+');
+lines.push('+---------------+------------+------------+------------+');
 console.log(lines.join('\n'));
 NODE
       ;;
