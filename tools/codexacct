@@ -844,8 +844,9 @@ function asNumber(v) {
 }
 
 const files = walkJsonlFiles(sessionsRoot).sort();
-const bySession = new Map();
-
+// Some sessions can be split across multiple files with the same session id.
+// Keep only the file with the highest observed total_tokens per session id.
+const selectedFilesBySession = new Map();
 for (const file of files) {
   let content = '';
   try {
@@ -854,12 +855,9 @@ for (const file of files) {
     continue;
   }
   if (!content) continue;
-
   const lines = content.split('\n');
   let sessionId = null;
-  let model = 'unknown';
-  let best = null;
-
+  let maxTotalInFile = 0;
   for (const line of lines) {
     if (!line) continue;
     let event;
@@ -868,41 +866,19 @@ for (const file of files) {
     } catch {
       continue;
     }
-
     if (event.type === 'session_meta') {
       sessionId = event?.payload?.id || sessionId;
     }
-
-    if (event.type === 'turn_context' && event?.payload?.model) {
-      model = event.payload.model;
-    }
-
     if (event.type === 'event_msg' && event?.payload?.type === 'token_count') {
       const t = event?.payload?.info?.total_token_usage;
       if (!t || typeof t !== 'object') continue;
-
-      const candidate = {
-        input: asNumber(t.input_tokens),
-        cached: asNumber(t.cached_input_tokens),
-        output: asNumber(t.output_tokens),
-        reasoning: asNumber(t.reasoning_output_tokens),
-        total: asNumber(t.total_tokens),
-      };
-
-      if (!best || candidate.total >= best.total) {
-        best = candidate;
-      }
+      maxTotalInFile = Math.max(maxTotalInFile, asNumber(t.total_tokens));
     }
   }
-
-  if (!best) continue;
   const key = sessionId || file;
-  const existing = bySession.get(key);
-  if (!existing || best.total >= existing.total) {
-    bySession.set(key, {
-      model,
-      ...best,
-    });
+  const prev = selectedFilesBySession.get(key);
+  if (!prev || maxTotalInFile >= prev.maxTotalInFile) {
+    selectedFilesBySession.set(key, { file, maxTotalInFile });
   }
 }
 
@@ -917,35 +893,116 @@ const totals = {
 };
 
 const byModel = new Map();
-for (const row of bySession.values()) {
-  const outWithReasoning = row.output + row.reasoning;
-  totals.input += row.input;
-  totals.cached += row.cached;
-  totals.output += row.output;
-  totals.reasoning += row.reasoning;
-  totals.outputWithReasoning += outWithReasoning;
-  totals.total += row.total;
-  totals.sessions += 1;
+for (const { file } of selectedFilesBySession.values()) {
+  let content = '';
+  try {
+    content = fs.readFileSync(file, 'utf8');
+  } catch {
+    continue;
+  }
+  if (!content) continue;
+  const lines = content.split('\n');
 
-  const key = row.model || 'unknown';
-  const m = byModel.get(key) || {
-    model: key,
-    sessions: 0,
+  let currentModel = 'unknown';
+  let seenAnySnapshot = false;
+  let prev = {
     input: 0,
     cached: 0,
     output: 0,
     reasoning: 0,
-    outputWithReasoning: 0,
     total: 0,
   };
-  m.sessions += 1;
-  m.input += row.input;
-  m.cached += row.cached;
-  m.output += row.output;
-  m.reasoning += row.reasoning;
-  m.outputWithReasoning += outWithReasoning;
-  m.total += row.total;
-  byModel.set(key, m);
+
+  for (const line of lines) {
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (event.type === 'turn_context' && event?.payload?.model) {
+      currentModel = event.payload.model;
+      continue;
+    }
+
+    if (event.type !== 'event_msg' || event?.payload?.type !== 'token_count') {
+      continue;
+    }
+
+    const t = event?.payload?.info?.total_token_usage;
+    if (!t || typeof t !== 'object') continue;
+    seenAnySnapshot = true;
+
+    const cur = {
+      input: asNumber(t.input_tokens),
+      cached: asNumber(t.cached_input_tokens),
+      output: asNumber(t.output_tokens),
+      reasoning: asNumber(t.reasoning_output_tokens),
+      total: asNumber(t.total_tokens),
+    };
+
+    const delta = {
+      input: Math.max(0, cur.input - prev.input),
+      cached: Math.max(0, cur.cached - prev.cached),
+      output: Math.max(0, cur.output - prev.output),
+      reasoning: Math.max(0, cur.reasoning - prev.reasoning),
+      total: Math.max(0, cur.total - prev.total),
+    };
+
+    totals.input += delta.input;
+    totals.cached += delta.cached;
+    totals.output += delta.output;
+    totals.reasoning += delta.reasoning;
+    totals.total += delta.total;
+    totals.outputWithReasoning += (delta.output + delta.reasoning);
+
+    const key = currentModel || 'unknown';
+    const m = byModel.get(key) || {
+      model: key,
+      sessions: 0,
+      input: 0,
+      cached: 0,
+      output: 0,
+      reasoning: 0,
+      outputWithReasoning: 0,
+      total: 0,
+    };
+    m.input += delta.input;
+    m.cached += delta.cached;
+    m.output += delta.output;
+    m.reasoning += delta.reasoning;
+    m.outputWithReasoning += (delta.output + delta.reasoning);
+    m.total += delta.total;
+    byModel.set(key, m);
+
+    prev = cur;
+  }
+
+  if (seenAnySnapshot) {
+    totals.sessions += 1;
+    const seenModelsInSession = new Set();
+    for (const line of lines) {
+      if (!line) continue;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (event.type === 'turn_context' && event?.payload?.model) {
+        seenModelsInSession.add(event.payload.model);
+      }
+    }
+    if (seenModelsInSession.size === 0) {
+      seenModelsInSession.add('unknown');
+    }
+    for (const model of seenModelsInSession) {
+      const m = byModel.get(model);
+      if (m) m.sessions += 1;
+    }
+  }
 }
 
 const models = Array.from(byModel.values()).sort((a, b) => b.total - a.total);
