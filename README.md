@@ -29,7 +29,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `tools/codexacct limits [profile|default] [--all] [--json] [--refresh]`
 - `tools/codexacct list`
 - `tools/codexacct whoami`
-- `tools/codexacct status <profile>`
+- `tools/codexacct status <profile> [--refresh]`
 - `tools/codexacct logout <profile>`
 - `tools/codexacct logout-default`
 
@@ -47,3 +47,10 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `[~]` = mismo `account_id`, pero token/identidad distinta.
 3. Si haces switch con la app abierta, usa `tools/codexacct use <profile> --relaunch`.
 4. Ejecuta `tools/codexacct whoami` para ver `Active profile` además de email/plan/account.
+
+## Diferencia entre `whoami` y `status`
+- `whoami`: vista rápida del perfil activo en `~/.codex` (cuenta que usa la app/CLI por defecto).
+- `status <profile>`: diagnóstico de un perfil específico en `~/.codex-profiles/<profile>`, incluyendo:
+- resumen de identidad (`plan`, `default_org`, `email`, `account_id`)
+- límites de uso (`5h` y `weekly`) con porcentaje restante/usado y tiempo de renovación
+- Usa `--refresh` para forzar consulta fresca al backend antes de mostrar límites.

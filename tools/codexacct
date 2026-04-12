@@ -17,7 +17,7 @@ Usage:
   codexacct limits [profile|default] [--all] [--json] [--refresh]
   codexacct list
   codexacct whoami
-  codexacct status <profile>
+  codexacct status <profile> [--refresh]
   codexacct logout <profile>
   codexacct logout-default
 
@@ -316,6 +316,16 @@ try {
 NODE
 }
 
+print_login_status_for_home() {
+  local target_home="$1"
+  local login_status
+  login_status="$(CODEX_HOME="$target_home" "$CODEX_BIN" login status 2>&1 || true)"
+  login_status="$(printf '%s\n' "$login_status" | sed '/^WARNING: proceeding, even though we could not update PATH:/d')"
+  if [ -n "$(printf '%s' "$login_status" | tr -d '[:space:]')" ]; then
+    printf '%s\n' "$login_status"
+  fi
+}
+
 fetch_usage_via_rpc() {
   local target_home="$1"
   local json_mode="$2"
@@ -550,6 +560,130 @@ const row = [
 
 process.stdout.write(row.join("\t"));
 '
+}
+
+json_usage_details_to_tsv() {
+  node -e '
+const fs = require("fs");
+const raw = fs.readFileSync(0, "utf8");
+const data = JSON.parse(raw);
+const r = data?.rateLimits || {};
+const p = r?.primary || null;
+const s = r?.secondary || null;
+const plan = data?.account?.planType || r?.planType || "unknown";
+const credits = r?.credits || null;
+
+function label(minutes, fallback) {
+  if (minutes === 300) return "5h";
+  if (minutes === 10080) return "weekly";
+  if (typeof minutes === "number") return `${minutes}m`;
+  return fallback;
+}
+
+function used(value) {
+  return (typeof value === "number") ? `${Math.max(0, Math.min(100, value))}%` : "-";
+}
+
+function remaining(value) {
+  return (typeof value === "number") ? `${Math.max(0, 100 - value)}%` : "-";
+}
+
+function resetParts(epochSeconds) {
+  if (epochSeconds == null) return ["-", "-"];
+  const nowMs = Date.now();
+  const targetMs = epochSeconds * 1000;
+  const deltaMs = targetMs - nowMs;
+  const absMs = Math.abs(deltaMs);
+  const mins = Math.floor(absMs / 60000);
+  const days = Math.floor(mins / (60 * 24));
+  const hours = Math.floor((mins % (60 * 24)) / 60);
+  const minutes = mins % 60;
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+  const relative = parts.slice(0, 2).join(" ");
+  const rel = deltaMs >= 0 ? `in ${relative}` : `${relative} ago`;
+
+  const d = new Date(targetMs);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const abs = `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+  return [rel, abs];
+}
+
+const [pRel, pAbs] = resetParts(p?.resetsAt);
+const [sRel, sAbs] = resetParts(s?.resetsAt);
+
+const row = [
+  plan,
+  label(p?.windowDurationMins, "primary"),
+  used(p?.usedPercent),
+  remaining(p?.usedPercent),
+  pRel,
+  pAbs,
+  label(s?.windowDurationMins, "secondary"),
+  used(s?.usedPercent),
+  remaining(s?.usedPercent),
+  sRel,
+  sAbs,
+  credits ? String(credits.hasCredits) : "-",
+  credits ? String(credits.unlimited) : "-",
+  credits && credits.balance != null ? String(credits.balance) : "null",
+];
+
+process.stdout.write(row.join("\t"));
+'
+}
+
+print_usage_details_for_home() {
+  local target_home="$1"
+  local refresh_mode="${2:-false}"
+
+  local rpc_json err_file
+  err_file="$(mktemp)"
+  if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+    local tsv
+    if tsv="$(printf "%s" "$rpc_json" | json_usage_details_to_tsv 2>/dev/null)"; then
+      local plan p_label p_used p_left p_rel p_abs s_label s_used s_left s_rel s_abs c_has c_unlimited c_balance
+      IFS=$'\t' read -r plan p_label p_used p_left p_rel p_abs s_label s_used s_left s_rel s_abs c_has c_unlimited c_balance <<<"$tsv"
+
+      echo "--- usage & limits ---"
+      echo
+      echo "plan: $plan"
+      echo "$p_label remaining: $(color_cyan "$p_left") (used $p_used)"
+      echo "$p_label renews: $p_rel ($(color_gray "$p_abs"))"
+      echo "$s_label remaining: $(color_cyan "$s_left") (used $s_used)"
+      echo "$s_label renews: $s_rel ($(color_gray "$s_abs"))"
+      echo "credits: has=$c_has unlimited=$c_unlimited balance=$c_balance"
+    else
+      echo "--- usage & limits ---"
+      echo
+      echo "usage unavailable: parse-error"
+    fi
+  else
+    local rpc_err err_lc reason
+    rpc_err="$(cat "$err_file")"
+    rpc_err="$(echo "$rpc_err" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+    err_lc="$(printf "%s" "$rpc_err" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]]; then
+      reason="not-logged"
+    elif [[ "$err_lc" == *"no rate limit snapshot"* ]]; then
+      reason="no-limits"
+    elif [[ "$err_lc" == *"timeout"* ]]; then
+      reason="timeout"
+    else
+      reason="rpc-error"
+    fi
+
+    echo "--- usage & limits ---"
+    echo
+    echo "usage unavailable: $reason"
+  fi
+  rm -f "$err_file"
 }
 
 crop_cell() {
@@ -870,14 +1004,10 @@ cmd_list() {
 
 cmd_whoami() {
   ensure_dirs
-  local d_auth active_profile login_status
+  local d_auth active_profile
   d_auth="$(auth_file "$DEFAULT_HOME")"
   active_profile="$(detect_active_profile)"
-  login_status="$("$CODEX_BIN" login status 2>&1 || true)"
-  login_status="$(printf '%s\n' "$login_status" | sed '/^WARNING: proceeding, even though we could not update PATH:/d')"
-  if [ -n "$(printf '%s' "$login_status" | tr -d '[:space:]')" ]; then
-    printf '%s\n' "$login_status"
-  fi
+  print_login_status_for_home "$DEFAULT_HOME"
   echo "$(color_green "Active profile: ")$(color_green_bold "$active_profile")"
   echo "Default home: $(color_gray "$DEFAULT_HOME")"
   echo
@@ -888,16 +1018,39 @@ cmd_whoami() {
 
 cmd_status() {
   local profile="${1:-}"
-  [ -n "$profile" ] || die "Usage: codexacct status <profile>"
+  shift || true
+  [ -n "$profile" ] || die "Usage: codexacct status <profile> [--refresh]"
   validate_profile "$profile"
+
+  local refresh_mode="false"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --refresh)
+        refresh_mode="true"
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codexacct status <profile> [--refresh]"
+        ;;
+    esac
+    shift
+  done
 
   local p_home
   p_home="$(profile_home "$profile")"
   [ -d "$p_home" ] || die "Profile '$profile' does not exist"
+  local p_auth
+  p_auth="$(auth_file "$p_home")"
+  [ -f "$p_auth" ] || die "No auth.json found for '$profile' at $p_home"
 
-  CODEX_HOME="$p_home" "$CODEX_BIN" login status || true
+  print_login_status_for_home "$p_home"
+  echo "$(color_green "Profile: ")$(color_green_bold "$profile")"
+  echo "Profile home: $(color_gray "$p_home")"
+  echo
   echo "--- auth summary ($profile) ---"
-  print_auth_summary "$(auth_file "$p_home")"
+  echo
+  print_auth_summary_whoami "$p_auth"
+  echo
+  print_usage_details_for_home "$p_home" "$refresh_mode"
 }
 
 cmd_logout() {
