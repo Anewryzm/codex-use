@@ -12,7 +12,7 @@ codexacct - Multi-account profile manager for Codex default home
 
 Usage:
   codexacct login <profile> [--device-auth|extra codex login flags]
-  codexacct use <profile> [--force]
+  codexacct use <profile> [--force] [--relaunch]
   codexacct usage [profile|default] [--all] [--json] [--refresh]
   codexacct limits [profile|default] [--all] [--json] [--refresh]
   codexacct list
@@ -58,7 +58,55 @@ auth_file() {
 }
 
 is_codex_app_running() {
+  if command -v osascript >/dev/null 2>&1; then
+    local running
+    running="$(osascript -e 'tell application "System Events" to (name of processes) contains "Codex"' 2>/dev/null || true)"
+    [ "$running" = "true" ] && return 0
+  fi
+
   pgrep -f "/Applications/Codex.app/Contents/MacOS/Codex" >/dev/null 2>&1
+}
+
+quit_codex_app() {
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e 'tell application "Codex" to quit' >/dev/null 2>&1 || true
+  fi
+
+  local i
+  for i in $(seq 1 20); do
+    if ! is_codex_app_running; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  return 1
+}
+
+open_codex_app() {
+  open -a Codex >/dev/null 2>&1
+}
+
+auth_fingerprint() {
+  local auth_path="$1"
+  [ -f "$auth_path" ] || {
+    echo ""
+    return 0
+  }
+
+  node - "$auth_path" <<'NODE'
+const fs = require('fs');
+const crypto = require('crypto');
+const p = process.argv[2];
+try {
+  const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const token = j?.tokens?.refresh_token || '';
+  const hash = crypto.createHash('sha256').update(token).digest('hex');
+  process.stdout.write(hash.slice(0, 16));
+} catch {
+  process.stdout.write('');
+}
+NODE
 }
 
 print_auth_summary() {
@@ -408,14 +456,26 @@ cmd_login() {
 cmd_use() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codexacct use <profile> [--force]"
+  [ -n "$profile" ] || die "Usage: codexacct use <profile> [--force] [--relaunch]"
   validate_profile "$profile"
   ensure_dirs
 
   local force="false"
-  if [ "${1:-}" = "--force" ]; then
-    force="true"
-  fi
+  local relaunch="false"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --force)
+        force="true"
+        ;;
+      --relaunch|--restart-app)
+        relaunch="true"
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codexacct use <profile> [--force] [--relaunch]"
+        ;;
+    esac
+    shift
+  done
 
   local p_home src dst
   p_home="$(profile_home "$profile")"
@@ -424,8 +484,15 @@ cmd_use() {
 
   [ -f "$src" ] || die "Profile '$profile' has no auth.json. Run: codexacct login $profile"
 
-  if is_codex_app_running && [ "$force" != "true" ]; then
-    die "Codex App is running. Close it first, or use 'codexacct use $profile --force' if you accept in-flight risk."
+  if is_codex_app_running; then
+    if [ "$relaunch" = "true" ]; then
+      echo "Codex App is running. Closing it before switch..."
+      if ! quit_codex_app; then
+        die "Could not close Codex App cleanly. Close it manually and retry."
+      fi
+    elif [ "$force" != "true" ]; then
+      die "Codex App is running. Close it first, or use 'codexacct use $profile --relaunch' (recommended) or '--force' if you accept in-flight risk."
+    fi
   fi
 
   if [ -f "$dst" ]; then
@@ -442,7 +509,15 @@ cmd_use() {
   echo "Default profile switched to '$profile'."
   echo "--- auth summary (default) ---"
   print_auth_summary "$dst"
-  echo "Tip: open/restart Codex App to ensure UI/session state reflects the new default account."
+  if [ "$relaunch" = "true" ]; then
+    if open_codex_app; then
+      echo "Codex App relaunched to pick up the new default auth."
+    else
+      echo "Switched auth, but failed to relaunch Codex App automatically. Open it manually."
+    fi
+  else
+    echo "Tip: open/restart Codex App to ensure UI/session state reflects the new default account."
+  fi
 }
 
 cmd_usage() {
@@ -576,11 +651,13 @@ cmd_usage() {
 cmd_list() {
   ensure_dirs
 
-  local default_auth default_account
+  local default_auth default_account default_fp
   default_auth="$(auth_file "$DEFAULT_HOME")"
   default_account=""
+  default_fp=""
   if [ -f "$default_auth" ]; then
     default_account="$(node -e 'const fs=require("fs");const p=process.argv[1];try{const j=JSON.parse(fs.readFileSync(p,"utf8"));process.stdout.write(j?.tokens?.account_id||"");}catch{process.stdout.write("");}' "$default_auth")"
+    default_fp="$(auth_fingerprint "$default_auth")"
   fi
 
   echo "Default home: $DEFAULT_HOME"
@@ -603,8 +680,12 @@ cmd_list() {
     if [ -f "$a" ]; then
       acc="$(node -e 'const fs=require("fs");const p=process.argv[1];try{const j=JSON.parse(fs.readFileSync(p,"utf8"));process.stdout.write(j?.tokens?.account_id||"");}catch{process.stdout.write("");}' "$a")"
       local mark=" "
-      if [ -n "$default_account" ] && [ "$acc" = "$default_account" ]; then
+      local fp
+      fp="$(auth_fingerprint "$a")"
+      if [ -n "$default_fp" ] && [ -n "$fp" ] && [ "$fp" = "$default_fp" ]; then
         mark="*"
+      elif [ -n "$default_account" ] && [ "$acc" = "$default_account" ]; then
+        mark="~"
       fi
       echo "[$mark] $name"
       print_auth_summary "$a" | sed 's/^/    /'
@@ -619,7 +700,8 @@ cmd_list() {
     echo "No profiles yet. Create one with: codexacct login <profile>"
   fi
 
-  echo "Legend: '*' means same account_id as current default ~/.codex/auth.json"
+  echo "Legend: '*' means exact same auth token as current default ~/.codex/auth.json"
+  echo "        '~' means same account_id but different token/identity"
 }
 
 cmd_whoami() {

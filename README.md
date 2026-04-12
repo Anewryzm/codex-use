@@ -13,6 +13,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 2. Cambiar cuenta activa del default:
 - `tools/codexacct use personal`
 - `tools/codexacct use trabajo`
+- `tools/codexacct use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
 
 3. Ver usage/rate limits por perfil (estilo CodexBar, vía RPC):
 - `tools/codexacct usage default`
@@ -23,7 +24,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 
 ## Comandos disponibles
 - `tools/codexacct login <profile>`
-- `tools/codexacct use <profile> [--force]`
+- `tools/codexacct use <profile> [--force] [--relaunch]`
 - `tools/codexacct usage [profile|default] [--all] [--json] [--refresh]`
 - `tools/codexacct limits [profile|default] [--all] [--json] [--refresh]`
 - `tools/codexacct list`
@@ -36,4 +37,12 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `use` crea backup automático de `~/.codex/auth.json` en `~/.codex/backups/`.
 - Evita cambiar cuenta con tareas activas en Codex App.
 - `--force` existe para casos avanzados y puede interrumpir sesiones en curso.
+- `--relaunch` cierra y vuelve a abrir Codex App para que la UI lea el nuevo `auth.json`.
 - `usage/limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
+
+## Diagnóstico rápido cuando "no cambia la cuenta" en la app
+1. Ejecuta `tools/codexacct list`.
+2. Revisa la leyenda:
+- `[*]` = el perfil usa exactamente el mismo token que `~/.codex`.
+- `[~]` = mismo `account_id`, pero token/identidad distinta.
+3. Si haces switch con la app abierta, usa `tools/codexacct use <profile> --relaunch`.
