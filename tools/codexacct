@@ -1034,7 +1034,9 @@ function toM(n) {
 
 const rows = [];
 const totals = data?.totals || {};
-for (const m of (data?.models || [])) {
+const models = data?.models || [];
+const totalSessionsDisplay = models.reduce((acc, m) => acc + Number(m?.sessions || 0), 0);
+for (const m of models) {
   rows.push([
     m.model || "unknown",
     String(m.sessions || 0),
@@ -1046,7 +1048,7 @@ for (const m of (data?.models || [])) {
 
 rows.push([
   "TOTAL",
-  String(totals.sessions || 0),
+  String(totalSessionsDisplay || totals.sessions || 0),
   toM(totals.input),
   toM(totals.outputWithReasoning),
   toM(totals.cached),
