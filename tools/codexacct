@@ -1209,6 +1209,18 @@ print_historical_usage_token_summary_row() {
   local label="$1"
   local center_value="$2"
   local right_value="$3"
+  if [ -z "$right_value" ]; then
+    local merged_cell
+    merged_cell="$(printf '%-30s' "$(crop_cell "$center_value" 30)")"
+    if [[ "$center_value" == \$* ]]; then merged_cell="$(color_yellow "$merged_cell")"; fi
+    printf '+----------------------+--------------------------------+\n'
+    printf '| %-20s | %s |\n' \
+      "$label" \
+      "$merged_cell"
+    printf '+----------------------+--------------------------------+\n'
+    return 0
+  fi
+
   local center_cell right_cell
   center_cell="$(printf '%-19s' "$(crop_cell "$center_value" 19)")"
   right_cell="$(printf '%-8s' "$(crop_cell "$right_value" 8)")"
@@ -1236,8 +1248,8 @@ print_historical_usage_table() {
 
   print_historical_usage_table_header
   local total_sessions="" total_input="" total_output="" total_cache=""
-  local total_cost_input="" total_cost_output="" total_cost_cache="" total_cost_all="" total_cost_inout=""
-  while IFS=$'\t' read -r model sessions input_m output_m cache_m cost_in cost_out cost_cache cost_total cost_inout; do
+  local total_cost_input="" total_cost_output="" total_cost_cache="" total_cost_all=""
+  while IFS=$'\t' read -r model sessions input_m output_m cache_m cost_in cost_out cost_cache cost_total _discard_cost_inout; do
     [ -n "$model" ] || continue
     if [ "$model" = "TOTAL" ]; then
       total_sessions="$sessions"
@@ -1248,7 +1260,6 @@ print_historical_usage_table() {
       total_cost_output="$cost_out"
       total_cost_cache="$cost_cache"
       total_cost_all="$cost_total"
-      total_cost_inout="$cost_inout"
       continue
     fi
     print_historical_usage_table_row "$model" "$sessions" "$input_m" "$output_m" "$cache_m"
@@ -1264,10 +1275,7 @@ print_historical_usage_table() {
   print_historical_usage_table_footer
   if [ -n "$total_cache" ]; then
     print_historical_usage_token_summary_row "Total Token Usage" "${total_io_m:-"-"}" "$total_cache"
-    print_historical_usage_token_summary_row "Total Token Cost" "${total_cost_inout:-"-"}" "${total_cost_cache:-"-"}"
-    if [ -n "$total_cost_all" ]; then
-      print_historical_usage_token_summary_row "Total Cost (All)" "$total_cost_all" ""
-    fi
+    print_historical_usage_token_summary_row "Total Token Cost" "${total_cost_all:-"-"}" ""
   fi
   echo "Cost formula: in_cost uses non-cached input tokens (in - cache)."
   echo "Note: out(M) includes reasoning output."
