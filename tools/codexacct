@@ -100,6 +100,15 @@ color_green_bold() {
   fi
 }
 
+color_yellow() {
+  local text="$1"
+  if supports_color; then
+    printf '\033[33m%s\033[0m' "$text"
+  else
+    printf '%s' "$text"
+  fi
+}
+
 color_gray() {
   local text="$1"
   if supports_color; then
@@ -1156,12 +1165,23 @@ print_historical_usage_table_row() {
   local input_m="$3"
   local output_m="$4"
   local cache_m="$5"
-  printf '| %-13s | %-4s | %-8s | %-8s | %-8s |\n' \
-    "$(crop_cell "$model" 13)" \
-    "$(crop_cell "$sessions" 4)" \
-    "$(crop_cell "$input_m" 8)" \
-    "$(crop_cell "$output_m" 8)" \
-    "$(crop_cell "$cache_m" 8)"
+  local model_cell sessions_cell input_cell output_cell cache_cell
+  model_cell="$(printf '%-13s' "$(crop_cell "$model" 13)")"
+  sessions_cell="$(printf '%-4s' "$(crop_cell "$sessions" 4)")"
+  input_cell="$(printf '%-8s' "$(crop_cell "$input_m" 8)")"
+  output_cell="$(printf '%-8s' "$(crop_cell "$output_m" 8)")"
+  cache_cell="$(printf '%-8s' "$(crop_cell "$cache_m" 8)")"
+
+  if [[ "$input_m" == \$* ]]; then input_cell="$(color_yellow "$input_cell")"; fi
+  if [[ "$output_m" == \$* ]]; then output_cell="$(color_yellow "$output_cell")"; fi
+  if [[ "$cache_m" == \$* ]]; then cache_cell="$(color_yellow "$cache_cell")"; fi
+
+  printf '| %s | %s | %s | %s | %s |\n' \
+    "$model_cell" \
+    "$sessions_cell" \
+    "$input_cell" \
+    "$output_cell" \
+    "$cache_cell"
 }
 
 print_historical_usage_table_footer() {
@@ -1189,11 +1209,16 @@ print_historical_usage_token_summary_row() {
   local label="$1"
   local center_value="$2"
   local right_value="$3"
+  local center_cell right_cell
+  center_cell="$(printf '%-19s' "$(crop_cell "$center_value" 19)")"
+  right_cell="$(printf '%-8s' "$(crop_cell "$right_value" 8)")"
+  if [[ "$center_value" == \$* ]]; then center_cell="$(color_yellow "$center_cell")"; fi
+  if [[ "$right_value" == \$* ]]; then right_cell="$(color_yellow "$right_cell")"; fi
   printf '+----------------------+---------------------+----------+\n'
-  printf '| %-20s | %-19s | %-8s |\n' \
+  printf '| %-20s | %s | %s |\n' \
     "$label" \
-    "$(crop_cell "$center_value" 19)" \
-    "$(crop_cell "$right_value" 8)"
+    "$center_cell" \
+    "$right_cell"
   printf '+----------------------+---------------------+----------+\n'
 }
 
@@ -1234,13 +1259,14 @@ print_historical_usage_table() {
   if [ -n "$total_sessions" ]; then
     print_historical_usage_table_footer
     print_historical_usage_table_row "" "$total_sessions" "$total_input" "$total_output" "$total_cache"
+    print_historical_usage_table_row "" "" "$total_cost_input" "$total_cost_output" "$total_cost_cache"
   fi
   print_historical_usage_table_footer
   if [ -n "$total_cache" ]; then
     print_historical_usage_token_summary_row "Total Token Usage" "${total_io_m:-"-"}" "$total_cache"
     print_historical_usage_token_summary_row "Total Token Cost" "${total_cost_inout:-"-"}" "${total_cost_cache:-"-"}"
     if [ -n "$total_cost_all" ]; then
-      echo "Total Token Cost: $total_cost_all"
+      print_historical_usage_token_summary_row "Total Cost (All)" "$total_cost_all" ""
     fi
   fi
   echo "Cost formula: in_cost uses non-cached input tokens (in - cache)."
