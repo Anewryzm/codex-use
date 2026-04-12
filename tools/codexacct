@@ -1124,6 +1124,11 @@ print_historical_usage_table_footer() {
   printf '+---------------+------+----------+----------+----------+\n'
 }
 
+print_historical_usage_table_blank_row() {
+  printf '| %-13s | %-4s | %-8s | %-8s | %-8s |\n' \
+    "" "" "" "" ""
+}
+
 historical_usage_total_io_m() {
   node -e '
 const fs = require("fs");
@@ -1177,7 +1182,8 @@ print_historical_usage_table() {
       continue
     fi
     print_historical_usage_table_row "$model" "$sessions" "$input_m" "$cached_m" "$output_m"
-    print_historical_usage_table_row "cost" "" "$cost_in" "$cost_cached" "$cost_out"
+    print_historical_usage_table_row "" "" "$cost_in" "$cost_cached" "$cost_out"
+    print_historical_usage_table_blank_row
   done <<< "$usage_rows"
 
   if [ -n "$total_sessions" ]; then
@@ -1186,8 +1192,8 @@ print_historical_usage_table() {
   fi
   print_historical_usage_table_footer
   if [ -n "$total_cached" ]; then
-    print_historical_usage_token_summary_row "Total Token Usage" "${total_io_m:-"-"} (in+out)" "$total_cached"
-    print_historical_usage_token_summary_row "Total Token Cost" "${total_cost_inout:-"-"} (in+out)" "${total_cost_cached:-"-"}"
+    print_historical_usage_token_summary_row "Total Token Usage" "${total_io_m:-"-"}" "$total_cached"
+    print_historical_usage_token_summary_row "Total Token Cost" "${total_cost_inout:-"-"}" "${total_cost_cached:-"-"}"
     if [ -n "$total_cost_all" ]; then
       echo "Total Token Cost: $total_cost_all"
     fi
