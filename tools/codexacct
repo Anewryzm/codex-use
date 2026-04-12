@@ -14,6 +14,8 @@ Usage:
   codexacct login <profile> [--device-auth|extra codex login flags]
   codexacct use <profile> [--force] [--relaunch]
   codexacct usage [--json]
+  codexacct pricing show
+  codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
   codexacct limits [profile|default] [--all] [--json] [--refresh]
   codexacct list
   codexacct whoami
@@ -33,6 +35,7 @@ Notes:
   - 'use' copies <profile>/auth.json into $DEFAULT_HOME/auth.json
   - 'usage' reads local session logs from: $HOME/.codex/sessions
   - 'limits' uses Codex app-server RPC (account/read + account/rateLimits/read)
+  - 'pricing' stores overrides in:       $DEFAULT_HOME/pricing.json
 USAGE
 }
 
@@ -56,6 +59,10 @@ profile_home() {
 
 auth_file() {
   echo "$1/auth.json"
+}
+
+pricing_file() {
+  echo "$DEFAULT_HOME/pricing.json"
 }
 
 supports_color() {
@@ -1023,14 +1030,48 @@ NODE
 }
 
 historical_usage_to_tsv() {
+  local pricing_path="${1:-}"
   node -e '
 const fs = require("fs");
+const pricingPath = process.argv[1] || "";
 const raw = fs.readFileSync(0, "utf8");
 const data = JSON.parse(raw);
-const PRICING_PER_M = {
+const DEFAULT_PRICING_PER_M = {
   "gpt-5.4": { input: 2.5, cached: 0.25, output: 15 },
   "gpt-5.3-codex": { input: 1.75, cached: 0.175, output: 14 },
 };
+
+function normalizePricing(rawPricing) {
+  if (!rawPricing || typeof rawPricing !== "object") return {};
+  const src = (rawPricing.models && typeof rawPricing.models === "object") ? rawPricing.models : rawPricing;
+  const out = {};
+  for (const [model, v] of Object.entries(src)) {
+    if (!v || typeof v !== "object") continue;
+    const input = Number(v.input);
+    const cached = Number(v.cached);
+    const output = Number(v.output);
+    const merged = {};
+    if (Number.isFinite(input)) merged.input = input;
+    if (Number.isFinite(cached)) merged.cached = cached;
+    if (Number.isFinite(output)) merged.output = output;
+    if (Object.keys(merged).length > 0) out[model] = merged;
+  }
+  return out;
+}
+
+let filePricing = {};
+if (pricingPath && fs.existsSync(pricingPath)) {
+  try {
+    filePricing = normalizePricing(JSON.parse(fs.readFileSync(pricingPath, "utf8")));
+  } catch {
+    filePricing = {};
+  }
+}
+
+const PRICING_PER_M = { ...DEFAULT_PRICING_PER_M };
+for (const [model, v] of Object.entries(filePricing)) {
+  PRICING_PER_M[model] = { ...(PRICING_PER_M[model] || {}), ...v };
+}
 
 function toM(n) {
   const m = Number(n || 0) / 1_000_000;
@@ -1053,10 +1094,13 @@ let totalCostInput = 0;
 let totalCostCached = 0;
 let totalCostOutput = 0;
 for (const m of models) {
-  const pricing = PRICING_PER_M[m.model || ""];
-  const costInput = pricing ? (Number(m.input || 0) / 1_000_000) * pricing.input : NaN;
-  const costCached = pricing ? (Number(m.cached || 0) / 1_000_000) * pricing.cached : NaN;
-  const costOutput = pricing ? (Number(m.outputWithReasoning || 0) / 1_000_000) * pricing.output : NaN;
+  const pricing = PRICING_PER_M[m.model || ""] || {};
+  const inputTokens = Number(m.input || 0);
+  const cachedTokens = Number(m.cached || 0);
+  const nonCachedInputTokens = Math.max(0, inputTokens - cachedTokens);
+  const costInput = Number.isFinite(pricing.input) ? (nonCachedInputTokens / 1_000_000) * pricing.input : NaN;
+  const costCached = Number.isFinite(pricing.cached) ? (Number(m.cached || 0) / 1_000_000) * pricing.cached : NaN;
+  const costOutput = Number.isFinite(pricing.output) ? (Number(m.outputWithReasoning || 0) / 1_000_000) * pricing.output : NaN;
   const costTotal = (Number.isFinite(costInput) && Number.isFinite(costCached) && Number.isFinite(costOutput))
     ? (costInput + costCached + costOutput)
     : NaN;
@@ -1096,7 +1140,7 @@ rows.push([
 for (const r of rows) {
   process.stdout.write(r.join("\t") + "\n");
 }
-'
+ ' "$pricing_path"
 }
 
 print_historical_usage_table_header() {
@@ -1154,9 +1198,10 @@ print_historical_usage_token_summary_row() {
 }
 
 print_historical_usage_table() {
-  local usage_json usage_rows total_io_m
+  local usage_json usage_rows total_io_m pricing_path
+  pricing_path="$(pricing_file)"
   usage_json="$(historical_usage_json)"
-  usage_rows="$(printf "%s" "$usage_json" | historical_usage_to_tsv 2>/dev/null || true)"
+  usage_rows="$(printf "%s" "$usage_json" | historical_usage_to_tsv "$pricing_path" 2>/dev/null || true)"
   total_io_m="$(printf "%s" "$usage_json" | historical_usage_total_io_m 2>/dev/null || true)"
 
   if [ -z "$usage_rows" ]; then
@@ -1198,7 +1243,182 @@ print_historical_usage_table() {
       echo "Total Token Cost: $total_cost_all"
     fi
   fi
+  echo "Cost formula: in_cost uses non-cached input tokens (in - cache)."
   echo "Note: out(M) includes reasoning output."
+}
+
+cmd_pricing() {
+  ensure_dirs
+  local sub="${1:-show}"
+  shift || true
+
+  case "$sub" in
+    show)
+      if [ "$#" -gt 0 ]; then
+        die "Usage: codexacct pricing show"
+      fi
+      local pricing_path
+      pricing_path="$(pricing_file)"
+      node - "$pricing_path" <<'NODE'
+const fs = require('fs');
+const pricingPath = process.argv[2];
+const defaults = {
+  "gpt-5.4": { input: 2.5, cached: 0.25, output: 15 },
+  "gpt-5.3-codex": { input: 1.75, cached: 0.175, output: 14 },
+};
+function normalizePricing(rawPricing) {
+  if (!rawPricing || typeof rawPricing !== "object") return {};
+  const src = (rawPricing.models && typeof rawPricing.models === "object") ? rawPricing.models : rawPricing;
+  const out = {};
+  for (const [model, v] of Object.entries(src)) {
+    if (!v || typeof v !== "object") continue;
+    const input = Number(v.input);
+    const cached = Number(v.cached);
+    const output = Number(v.output);
+    const merged = {};
+    if (Number.isFinite(input)) merged.input = input;
+    if (Number.isFinite(cached)) merged.cached = cached;
+    if (Number.isFinite(output)) merged.output = output;
+    if (Object.keys(merged).length > 0) out[model] = merged;
+  }
+  return out;
+}
+let overrides = {};
+if (fs.existsSync(pricingPath)) {
+  try {
+    overrides = normalizePricing(JSON.parse(fs.readFileSync(pricingPath, 'utf8')));
+  } catch {
+    overrides = {};
+  }
+}
+const effective = { ...defaults };
+for (const [model, v] of Object.entries(overrides)) {
+  effective[model] = { ...(effective[model] || {}), ...v };
+}
+const ordered = Object.keys(effective).sort((a, b) => a.localeCompare(b));
+const lines = [];
+lines.push(`Pricing file: ${pricingPath}`);
+lines.push('+---------------+----------+----------+----------+');
+lines.push('| model         | in($/M)  | cach($/M)| out($/M) |');
+lines.push('+---------------+----------+----------+----------+');
+for (const model of ordered) {
+  const p = effective[model] || {};
+  const i = Number.isFinite(p.input) ? p.input.toFixed(3).replace(/\.?0+$/, '') : 'n/a';
+  const c = Number.isFinite(p.cached) ? p.cached.toFixed(3).replace(/\.?0+$/, '') : 'n/a';
+  const o = Number.isFinite(p.output) ? p.output.toFixed(3).replace(/\.?0+$/, '') : 'n/a';
+  const row = `| ${model.padEnd(13)} | ${i.padEnd(8)} | ${c.padEnd(8)} | ${o.padEnd(8)} |`;
+  lines.push(row);
+}
+lines.push('+---------------+----------+----------+----------+');
+console.log(lines.join('\n'));
+NODE
+      ;;
+    set)
+      local model="${1:-}"
+      shift || true
+      [ -n "$model" ] || die "Usage: codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+
+      local in_val="" cache_val="" out_val=""
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --in)
+            in_val="${2:-}"
+            shift 2
+            ;;
+          --cache)
+            cache_val="${2:-}"
+            shift 2
+            ;;
+          --out)
+            out_val="${2:-}"
+            shift 2
+            ;;
+          *)
+            die "Unknown option '$1'. Usage: codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+            ;;
+        esac
+      done
+
+      [ -n "$in_val$cache_val$out_val" ] || die "Pass at least one of: --in, --cache, --out"
+      if ! node - "$in_val" "$cache_val" "$out_val" <<'NODE' >/dev/null
+const vals = process.argv.slice(2);
+for (const v of vals) {
+  if (!v) continue;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) process.exit(1);
+}
+NODE
+      then
+        die "Prices must be numeric and >= 0"
+      fi
+
+      local pricing_path
+      pricing_path="$(pricing_file)"
+      if ! node - "$pricing_path" "$model" "$in_val" "$cache_val" "$out_val" >/dev/null <<'NODE'
+const fs = require('fs');
+const pricingPath = process.argv[2];
+const model = process.argv[3];
+const inVal = process.argv[4];
+const cacheVal = process.argv[5];
+const outVal = process.argv[6];
+
+function normalizePricing(rawPricing) {
+  if (!rawPricing || typeof rawPricing !== "object") return {};
+  const src = (rawPricing.models && typeof rawPricing.models === "object") ? rawPricing.models : rawPricing;
+  const out = {};
+  for (const [m, v] of Object.entries(src)) {
+    if (!v || typeof v !== "object") continue;
+    const input = Number(v.input);
+    const cached = Number(v.cached);
+    const output = Number(v.output);
+    const merged = {};
+    if (Number.isFinite(input)) merged.input = input;
+    if (Number.isFinite(cached)) merged.cached = cached;
+    if (Number.isFinite(output)) merged.output = output;
+    if (Object.keys(merged).length > 0) out[m] = merged;
+  }
+  return out;
+}
+
+let current = {};
+if (fs.existsSync(pricingPath)) {
+  try {
+    current = normalizePricing(JSON.parse(fs.readFileSync(pricingPath, 'utf8')));
+  } catch {
+    current = {};
+  }
+}
+try {
+  const prev = current[model] || {};
+  const next = { ...prev };
+  if (inVal) next.input = Number(inVal);
+  if (cacheVal) next.cached = Number(cacheVal);
+  if (outVal) next.output = Number(outVal);
+  current[model] = next;
+  fs.writeFileSync(pricingPath, JSON.stringify(current, null, 2) + '\n', 'utf8');
+  process.stdout.write(JSON.stringify({ model, pricing: next }, null, 2));
+} catch (err) {
+  const msg = (err && err.message) ? err.message : 'unknown write error';
+  process.stderr.write(msg + '\n');
+  process.exit(1);
+}
+NODE
+      then
+        die "Could not write pricing file at '$pricing_path'"
+      fi
+      chmod 600 "$pricing_path" || true
+      echo "Pricing updated for '$model'."
+      cmd_pricing show
+      ;;
+    help|-h|--help)
+      echo "Usage:"
+      echo "  codexacct pricing show"
+      echo "  codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+      ;;
+    *)
+      die "Unknown pricing subcommand '$sub'. Use: codexacct pricing show|set"
+      ;;
+  esac
 }
 
 print_current_default_profile_line() {
@@ -1616,6 +1836,7 @@ main() {
     use) cmd_use "$@" ;;
     usage) cmd_usage usage "$@" ;;
     limits) cmd_usage limits "$@" ;;
+    pricing) cmd_pricing "$@" ;;
     list) cmd_list ;;
     whoami) cmd_whoami ;;
     status) cmd_status "$@" ;;
