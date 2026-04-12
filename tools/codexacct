@@ -1027,6 +1027,10 @@ historical_usage_to_tsv() {
 const fs = require("fs");
 const raw = fs.readFileSync(0, "utf8");
 const data = JSON.parse(raw);
+const PRICING_PER_M = {
+  "gpt-5.4": { input: 2.5, cached: 0.25, output: 15 },
+  "gpt-5.3-codex": { input: 1.75, cached: 0.175, output: 14 },
+};
 
 function toM(n) {
   const m = Number(n || 0) / 1_000_000;
@@ -1034,26 +1038,59 @@ function toM(n) {
   return `${oneDecimalTrunc.toFixed(1)}M`;
 }
 
+function toCost(n) {
+  const v = Number(n || 0);
+  if (!Number.isFinite(v)) return "n/a";
+  return `$${v.toFixed(2)}`;
+}
+
 const rows = [];
 const totals = data?.totals || {};
 const models = data?.models || [];
 const totalSessionsDisplay = models.reduce((acc, m) => acc + Number(m?.sessions || 0), 0);
+
+let totalCostInput = 0;
+let totalCostCached = 0;
+let totalCostOutput = 0;
 for (const m of models) {
+  const pricing = PRICING_PER_M[m.model || ""];
+  const costInput = pricing ? (Number(m.input || 0) / 1_000_000) * pricing.input : NaN;
+  const costCached = pricing ? (Number(m.cached || 0) / 1_000_000) * pricing.cached : NaN;
+  const costOutput = pricing ? (Number(m.outputWithReasoning || 0) / 1_000_000) * pricing.output : NaN;
+  const costTotal = (Number.isFinite(costInput) && Number.isFinite(costCached) && Number.isFinite(costOutput))
+    ? (costInput + costCached + costOutput)
+    : NaN;
+
+  if (Number.isFinite(costInput)) totalCostInput += costInput;
+  if (Number.isFinite(costCached)) totalCostCached += costCached;
+  if (Number.isFinite(costOutput)) totalCostOutput += costOutput;
+
   rows.push([
     m.model || "unknown",
     String(m.sessions || 0),
     toM(m.input),
     toM(m.cached),
     toM(m.outputWithReasoning),
+    toCost(costInput),
+    toCost(costCached),
+    toCost(costOutput),
+    toCost(costTotal),
   ]);
 }
 
+const totalCostInOut = totalCostInput + totalCostOutput;
+const totalCostAll = totalCostInput + totalCostCached + totalCostOutput;
 rows.push([
   "TOTAL",
   String(totalSessionsDisplay || totals.sessions || 0),
   toM(totals.input),
   toM(totals.cached),
   toM(totals.outputWithReasoning),
+  toCost(totalCostInput),
+  toCost(totalCostCached),
+  toCost(totalCostOutput),
+  toCost(totalCostAll),
+  toCost(totalCostInOut),
 ]);
 
 for (const r of rows) {
@@ -1100,14 +1137,15 @@ process.stdout.write(`${m.toFixed(1)}M`);
 }
 
 print_historical_usage_token_summary_row() {
-  local total_io_m="$1"
-  local total_cached_m="$2"
-  printf '+------------------------+---------------------+----------+\n'
-  printf '| %-22s | %-19s | %-8s |\n' \
-    "Total Token Usage" \
-    "$(crop_cell "${total_io_m} (in+out)" 19)" \
-    "$(crop_cell "$total_cached_m" 8)"
-  printf '+------------------------+---------------------+----------+\n'
+  local label="$1"
+  local center_value="$2"
+  local right_value="$3"
+  printf '+----------------------+---------------------+----------+\n'
+  printf '| %-20s | %-19s | %-8s |\n' \
+    "$label" \
+    "$(crop_cell "$center_value" 19)" \
+    "$(crop_cell "$right_value" 8)"
+  printf '+----------------------+---------------------+----------+\n'
 }
 
 print_historical_usage_table() {
@@ -1123,16 +1161,23 @@ print_historical_usage_table() {
 
   print_historical_usage_table_header
   local total_sessions="" total_input="" total_cached="" total_output=""
-  while IFS=$'\t' read -r model sessions input_m cached_m output_m; do
+  local total_cost_input="" total_cost_cached="" total_cost_output="" total_cost_all="" total_cost_inout=""
+  while IFS=$'\t' read -r model sessions input_m cached_m output_m cost_in cost_cached cost_out cost_total cost_inout; do
     [ -n "$model" ] || continue
     if [ "$model" = "TOTAL" ]; then
       total_sessions="$sessions"
       total_input="$input_m"
       total_cached="$cached_m"
       total_output="$output_m"
+      total_cost_input="$cost_in"
+      total_cost_cached="$cost_cached"
+      total_cost_output="$cost_out"
+      total_cost_all="$cost_total"
+      total_cost_inout="$cost_inout"
       continue
     fi
     print_historical_usage_table_row "$model" "$sessions" "$input_m" "$cached_m" "$output_m"
+    print_historical_usage_table_row "cost" "" "$cost_in" "$cost_cached" "$cost_out"
   done <<< "$usage_rows"
 
   if [ -n "$total_sessions" ]; then
@@ -1141,7 +1186,11 @@ print_historical_usage_table() {
   fi
   print_historical_usage_table_footer
   if [ -n "$total_cached" ]; then
-    print_historical_usage_token_summary_row "${total_io_m:-"-"}" "$total_cached"
+    print_historical_usage_token_summary_row "Total Token Usage" "${total_io_m:-"-"} (in+out)" "$total_cached"
+    print_historical_usage_token_summary_row "Total Token Cost" "${total_cost_inout:-"-"} (in+out)" "${total_cost_cached:-"-"}"
+    if [ -n "$total_cost_all" ]; then
+      echo "Total Token Cost: $total_cost_all"
+    fi
   fi
   echo "Note: out(M) includes reasoning output."
 }
