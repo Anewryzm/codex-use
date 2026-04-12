@@ -46,3 +46,4 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `[*]` = el perfil usa exactamente el mismo token que `~/.codex`.
 - `[~]` = mismo `account_id`, pero token/identidad distinta.
 3. Si haces switch con la app abierta, usa `tools/codexacct use <profile> --relaunch`.
+4. Ejecuta `tools/codexacct whoami` para ver `Active profile` además de email/plan/account.

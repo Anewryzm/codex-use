@@ -109,6 +109,83 @@ try {
 NODE
 }
 
+auth_account_id() {
+  local auth_path="$1"
+  [ -f "$auth_path" ] || {
+    echo ""
+    return 0
+  }
+
+  node - "$auth_path" <<'NODE'
+const fs = require('fs');
+const p = process.argv[2];
+try {
+  const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+  process.stdout.write(j?.tokens?.account_id || '');
+} catch {
+  process.stdout.write('');
+}
+NODE
+}
+
+detect_active_profile() {
+  local default_auth default_fp default_account
+  default_auth="$(auth_file "$DEFAULT_HOME")"
+  [ -f "$default_auth" ] || {
+    echo "(not logged in)"
+    return 0
+  }
+
+  default_fp="$(auth_fingerprint "$default_auth")"
+  default_account="$(auth_account_id "$default_auth")"
+
+  local exact_matches=()
+  local account_matches=()
+
+  for d in "$PROFILES_ROOT"/*; do
+    [ -d "$d" ] || continue
+    local name profile_auth profile_fp profile_account
+    name="$(basename "$d")"
+    profile_auth="$(auth_file "$d")"
+    [ -f "$profile_auth" ] || continue
+
+    profile_fp="$(auth_fingerprint "$profile_auth")"
+    profile_account="$(auth_account_id "$profile_auth")"
+
+    if [ -n "$default_fp" ] && [ -n "$profile_fp" ] && [ "$profile_fp" = "$default_fp" ]; then
+      exact_matches+=("$name")
+    elif [ -n "$default_account" ] && [ "$profile_account" = "$default_account" ]; then
+      account_matches+=("$name")
+    fi
+  done
+
+  if [ "${#exact_matches[@]}" -eq 1 ]; then
+    echo "${exact_matches[0]}"
+    return 0
+  fi
+
+  if [ "${#exact_matches[@]}" -gt 1 ]; then
+    local joined
+    joined="$(IFS=', '; echo "${exact_matches[*]}")"
+    echo "ambiguous-token ($joined)"
+    return 0
+  fi
+
+  if [ "${#account_matches[@]}" -eq 1 ]; then
+    echo "${account_matches[0]} (same account_id)"
+    return 0
+  fi
+
+  if [ "${#account_matches[@]}" -gt 1 ]; then
+    local joined
+    joined="$(IFS=', '; echo "${account_matches[*]}")"
+    echo "unmapped-token (same account_id in: $joined)"
+    return 0
+  fi
+
+  echo "(unmapped)"
+}
+
 print_auth_summary() {
   local auth_path="$1"
   [ -f "$auth_path" ] || {
@@ -656,7 +733,7 @@ cmd_list() {
   default_account=""
   default_fp=""
   if [ -f "$default_auth" ]; then
-    default_account="$(node -e 'const fs=require("fs");const p=process.argv[1];try{const j=JSON.parse(fs.readFileSync(p,"utf8"));process.stdout.write(j?.tokens?.account_id||"");}catch{process.stdout.write("");}' "$default_auth")"
+    default_account="$(auth_account_id "$default_auth")"
     default_fp="$(auth_fingerprint "$default_auth")"
   fi
 
@@ -678,7 +755,7 @@ cmd_list() {
 
     local acc
     if [ -f "$a" ]; then
-      acc="$(node -e 'const fs=require("fs");const p=process.argv[1];try{const j=JSON.parse(fs.readFileSync(p,"utf8"));process.stdout.write(j?.tokens?.account_id||"");}catch{process.stdout.write("");}' "$a")"
+      acc="$(auth_account_id "$a")"
       local mark=" "
       local fp
       fp="$(auth_fingerprint "$a")"
@@ -706,9 +783,11 @@ cmd_list() {
 
 cmd_whoami() {
   ensure_dirs
-  local d_auth
+  local d_auth active_profile
   d_auth="$(auth_file "$DEFAULT_HOME")"
+  active_profile="$(detect_active_profile)"
   echo "Default home: $DEFAULT_HOME"
+  echo "Active profile: $active_profile"
   "$CODEX_BIN" login status || true
   echo "--- auth summary (default) ---"
   print_auth_summary "$d_auth"
