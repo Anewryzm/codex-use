@@ -1043,8 +1043,8 @@ for (const m of models) {
     m.model || "unknown",
     String(m.sessions || 0),
     toM(m.input),
-    toM(m.outputWithReasoning),
     toM(m.cached),
+    toM(m.outputWithReasoning),
   ]);
 }
 
@@ -1052,8 +1052,8 @@ rows.push([
   "TOTAL",
   String(totalSessionsDisplay || totals.sessions || 0),
   toM(totals.input),
-  toM(totals.outputWithReasoning),
   toM(totals.cached),
+  toM(totals.outputWithReasoning),
 ]);
 
 for (const r of rows) {
@@ -1065,32 +1065,56 @@ for (const r of rows) {
 print_historical_usage_table_header() {
   printf '+---------------+------+----------+----------+----------+\n'
   printf '| %-13s | %-4s | %-8s | %-8s | %-8s |\n' \
-    "scope" "ses" "in(M)" "out(M)" "cach(M)"
+    "model" "ses" "in(M)" "cach(M)" "out(M)"
   printf '+---------------+------+----------+----------+----------+\n'
 }
 
 print_historical_usage_table_row() {
-  local scope="$1"
+  local model="$1"
   local sessions="$2"
   local input_m="$3"
-  local output_m="$4"
-  local cached_m="$5"
+  local cached_m="$4"
+  local output_m="$5"
   printf '| %-13s | %-4s | %-8s | %-8s | %-8s |\n' \
-    "$(crop_cell "$scope" 13)" \
+    "$(crop_cell "$model" 13)" \
     "$(crop_cell "$sessions" 4)" \
     "$(crop_cell "$input_m" 8)" \
-    "$(crop_cell "$output_m" 8)" \
-    "$(crop_cell "$cached_m" 8)"
+    "$(crop_cell "$cached_m" 8)" \
+    "$(crop_cell "$output_m" 8)"
 }
 
 print_historical_usage_table_footer() {
   printf '+---------------+------+----------+----------+----------+\n'
 }
 
+historical_usage_total_io_m() {
+  node -e '
+const fs = require("fs");
+const raw = fs.readFileSync(0, "utf8");
+const data = JSON.parse(raw);
+const input = Number(data?.totals?.input || 0);
+const out = Number(data?.totals?.outputWithReasoning || 0);
+const m = Math.trunc(((input + out) / 1_000_000) * 10) / 10;
+process.stdout.write(`${m.toFixed(1)}M`);
+'
+}
+
+print_historical_usage_token_summary_row() {
+  local total_io_m="$1"
+  local total_cached_m="$2"
+  printf '+------------------------+---------------------+----------+\n'
+  printf '| %-22s | %-19s | %-8s |\n' \
+    "Total Token Usage" \
+    "$(crop_cell "${total_io_m} (in+out)" 19)" \
+    "$(crop_cell "$total_cached_m" 8)"
+  printf '+------------------------+---------------------+----------+\n'
+}
+
 print_historical_usage_table() {
-  local usage_json usage_rows
+  local usage_json usage_rows total_io_m
   usage_json="$(historical_usage_json)"
   usage_rows="$(printf "%s" "$usage_json" | historical_usage_to_tsv 2>/dev/null || true)"
+  total_io_m="$(printf "%s" "$usage_json" | historical_usage_total_io_m 2>/dev/null || true)"
 
   if [ -z "$usage_rows" ]; then
     echo "No historical usage data found."
@@ -1098,25 +1122,27 @@ print_historical_usage_table() {
   fi
 
   print_historical_usage_table_header
-  local total_scope="" total_sessions="" total_input="" total_output="" total_cached=""
-  while IFS=$'\t' read -r scope sessions input_m output_m cached_m; do
-    [ -n "$scope" ] || continue
-    if [ "$scope" = "TOTAL" ]; then
-      total_scope="$scope"
+  local total_sessions="" total_input="" total_cached="" total_output=""
+  while IFS=$'\t' read -r model sessions input_m cached_m output_m; do
+    [ -n "$model" ] || continue
+    if [ "$model" = "TOTAL" ]; then
       total_sessions="$sessions"
       total_input="$input_m"
-      total_output="$output_m"
       total_cached="$cached_m"
+      total_output="$output_m"
       continue
     fi
-    print_historical_usage_table_row "$scope" "$sessions" "$input_m" "$output_m" "$cached_m"
+    print_historical_usage_table_row "$model" "$sessions" "$input_m" "$cached_m" "$output_m"
   done <<< "$usage_rows"
 
-  if [ -n "$total_scope" ]; then
+  if [ -n "$total_sessions" ]; then
     print_historical_usage_table_footer
-    print_historical_usage_table_row "$total_scope" "$total_sessions" "$total_input" "$total_output" "$total_cached"
+    print_historical_usage_table_row "" "$total_sessions" "$total_input" "$total_cached" "$total_output"
   fi
   print_historical_usage_table_footer
+  if [ -n "$total_cached" ]; then
+    print_historical_usage_token_summary_row "${total_io_m:-"-"}" "$total_cached"
+  fi
   echo "Note: out(M) includes reasoning output."
 }
 
