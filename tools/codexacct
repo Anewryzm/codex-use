@@ -767,10 +767,10 @@ crop_cell() {
 }
 
 print_usage_table_header() {
-  printf '+--------------+-------------------------------------+--------------------+--------------------+\n'
-  printf '| %-12s | %-35s | %-18s | %-18s |\n' \
+  printf '+------------+---------------------------------+--------------------+--------------------+\n'
+  printf '| %-10s | %-31s | %-18s | %-18s |\n' \
     "profile" "email" "5h (reset)" "weekly (reset)"
-  printf '+--------------+-------------------------------------+--------------------+--------------------+\n'
+  printf '+------------+---------------------------------+--------------------+--------------------+\n'
 }
 
 print_usage_table_row() {
@@ -784,16 +784,16 @@ print_usage_table_row() {
     check_char="$(color_green "✓")"
   fi
 
-  printf '| %-12s | %s %-33s | %-18s | %-18s |\n' \
-    "$(crop_cell "$profile" 12)" \
+  printf '| %-10s | %s %-29s | %-18s | %-18s |\n' \
+    "$(crop_cell "$profile" 10)" \
     "$check_char" \
-    "$(crop_cell "$email" 33)" \
+    "$(crop_cell "$email" 29)" \
     "$(crop_cell "$five_h" 18)" \
     "$(crop_cell "$weekly" 18)"
 }
 
 print_usage_table_footer() {
-  printf '+--------------+-------------------------------------+--------------------+--------------------+\n'
+  printf '+------------+---------------------------------+--------------------+--------------------+\n'
 }
 
 cmd_login() {
@@ -962,13 +962,22 @@ cmd_usage() {
     echo
 
     print_usage_table_header
+    local active_profile_for_default
+    active_profile_for_default="$(detect_active_profile)"
+    if [[ "$active_profile_for_default" == *"("* ]] || [[ "$active_profile_for_default" == "(not logged in)" ]] || [[ "$active_profile_for_default" == "(unmapped)" ]]; then
+      active_profile_for_default=""
+    fi
     while IFS='|' read -r label target_home; do
       [ -n "$label" ] || continue
+      local display_label="$label"
+      if [ -n "$active_profile_for_default" ] && [ "$label" = "$active_profile_for_default" ]; then
+        display_label="${label}*"
+      fi
 
       local target_auth
       target_auth="$(auth_file "$target_home")"
       if [ ! -f "$target_auth" ]; then
-        print_usage_table_row "$label" "no-auth" "-" "-" "false"
+        print_usage_table_row "$display_label" "no-auth" "-" "-" "false"
         continue
       fi
 
@@ -980,9 +989,9 @@ cmd_usage() {
           IFS=$'\t' read -r email plan p_left p_reset s_left s_reset <<<"$tsv"
           five_h_cell="$(compact_window_cell "$p_left" "$p_reset")"
           weekly_cell="$(compact_window_cell "$s_left" "$s_reset")"
-          print_usage_table_row "$label" "$email" "$five_h_cell" "$weekly_cell" "true"
+          print_usage_table_row "$display_label" "$email" "$five_h_cell" "$weekly_cell" "true"
         else
-          print_usage_table_row "$label" "parse-error" "-" "-" "false"
+          print_usage_table_row "$display_label" "parse-error" "-" "-" "false"
         fi
       else
         rpc_err="$(cat "$err_file")"
@@ -998,7 +1007,7 @@ cmd_usage() {
         else
           status="rpc-error"
         fi
-        print_usage_table_row "$label" "$status" "-" "-" "false"
+        print_usage_table_row "$display_label" "$status" "-" "-" "false"
       fi
       rm -f "$err_file"
     done < <(collect_usage_targets)
