@@ -135,6 +135,23 @@ renewal_hint_text() {
   echo "renews $rel"
 }
 
+compact_window_cell() {
+  local remaining="$1"
+  local reset="$2"
+
+  if [ -z "$remaining" ] || [ "$remaining" = "-" ]; then
+    echo "-"
+    return 0
+  fi
+
+  if [ -z "$reset" ] || [ "$reset" = "-" ]; then
+    echo "$remaining (-)"
+    return 0
+  fi
+
+  echo "$remaining ($reset)"
+}
+
 format_credits_line() {
   local has="$1"
   local unlimited="$2"
@@ -750,35 +767,33 @@ crop_cell() {
 }
 
 print_usage_table_header() {
-  printf '+--------------+--------------------------------+----------+----------+----------------+----------+----------------+--------------+\n'
-  printf '| %-12s | %-30s | %-8s | %-8s | %-14s | %-8s | %-14s | %-12s |\n' \
-    "profile" "email" "plan" "5h_left" "5h_reset" "wk_left" "wk_reset" "status"
-  printf '+--------------+--------------------------------+----------+----------+----------------+----------+----------------+--------------+\n'
+  printf '+--------------+-------------------------------------+--------------------+--------------------+\n'
+  printf '| %-12s | %-35s | %-18s | %-18s |\n' \
+    "profile" "email" "5h (reset)" "weekly (reset)"
+  printf '+--------------+-------------------------------------+--------------------+--------------------+\n'
 }
 
 print_usage_table_row() {
   local profile="$1"
   local email="$2"
-  local plan="$3"
-  local p_left="$4"
-  local p_reset="$5"
-  local s_left="$6"
-  local s_reset="$7"
-  local status="$8"
+  local five_h="$3"
+  local weekly="$4"
+  local ok_flag="${5:-false}"
+  local check_char="-"
+  if [ "$ok_flag" = "true" ]; then
+    check_char="$(color_green "✓")"
+  fi
 
-  printf '| %-12s | %-30s | %-8s | %-8s | %-14s | %-8s | %-14s | %-12s |\n' \
+  printf '| %-12s | %s %-33s | %-18s | %-18s |\n' \
     "$(crop_cell "$profile" 12)" \
-    "$(crop_cell "$email" 30)" \
-    "$(crop_cell "$plan" 8)" \
-    "$(crop_cell "$p_left" 8)" \
-    "$(crop_cell "$p_reset" 14)" \
-    "$(crop_cell "$s_left" 8)" \
-    "$(crop_cell "$s_reset" 14)" \
-    "$(crop_cell "$status" 12)"
+    "$check_char" \
+    "$(crop_cell "$email" 33)" \
+    "$(crop_cell "$five_h" 18)" \
+    "$(crop_cell "$weekly" 18)"
 }
 
 print_usage_table_footer() {
-  printf '+--------------+--------------------------------+----------+----------+----------------+----------+----------------+--------------+\n'
+  printf '+--------------+-------------------------------------+--------------------+--------------------+\n'
 }
 
 cmd_login() {
@@ -897,6 +912,9 @@ cmd_usage() {
       --all)
         all_mode="true"
         ;;
+      -a)
+        all_mode="true"
+        ;;
       --json)
         json_mode="true"
         ;;
@@ -914,6 +932,7 @@ cmd_usage() {
         echo "  codexacct $command_mode trabajo"
         echo "  codexacct $command_mode default --json"
         echo "  codexacct $command_mode --all"
+        echo "  codexacct $command_mode -a"
         return 0
         ;;
       *)
@@ -949,7 +968,7 @@ cmd_usage() {
       local target_auth
       target_auth="$(auth_file "$target_home")"
       if [ ! -f "$target_auth" ]; then
-        print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "no-auth"
+        print_usage_table_row "$label" "no-auth" "-" "-" "false"
         continue
       fi
 
@@ -957,11 +976,13 @@ cmd_usage() {
       err_file="$(mktemp)"
       if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
         if tsv="$(printf "%s" "$rpc_json" | json_usage_to_tsv 2>/dev/null)"; then
-          local email plan p_left p_reset s_left s_reset
+          local email plan p_left p_reset s_left s_reset five_h_cell weekly_cell
           IFS=$'\t' read -r email plan p_left p_reset s_left s_reset <<<"$tsv"
-          print_usage_table_row "$label" "$email" "$plan" "$p_left" "$p_reset" "$s_left" "$s_reset" "ok"
+          five_h_cell="$(compact_window_cell "$p_left" "$p_reset")"
+          weekly_cell="$(compact_window_cell "$s_left" "$s_reset")"
+          print_usage_table_row "$label" "$email" "$five_h_cell" "$weekly_cell" "true"
         else
-          print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "parse-error"
+          print_usage_table_row "$label" "parse-error" "-" "-" "false"
         fi
       else
         rpc_err="$(cat "$err_file")"
@@ -977,7 +998,7 @@ cmd_usage() {
         else
           status="rpc-error"
         fi
-        print_usage_table_row "$label" "-" "-" "-" "-" "-" "-" "$status"
+        print_usage_table_row "$label" "$status" "-" "-" "false"
       fi
       rm -f "$err_file"
     done < <(collect_usage_targets)
@@ -999,7 +1020,15 @@ cmd_usage() {
   [ -f "$(auth_file "$target_home")" ] || die "No auth.json found for '$label' at $target_home"
 
   if [ "$command_mode" = "limits" ] && [ "$json_mode" != "true" ]; then
-    echo "Target profile: $(color_green_bold "$label")"
+    local label_with_profile="$label"
+    if [ "$label" = "default" ]; then
+      local active_profile
+      active_profile="$(detect_active_profile)"
+      if [ "$active_profile" != "(not logged in)" ] && [ -n "$active_profile" ]; then
+        label_with_profile="$label ($active_profile)"
+      fi
+    fi
+    echo "Target profile: $(color_green_bold "$label_with_profile")"
     echo "CODEX_HOME: $(color_gray "$target_home")"
     if [ "$refresh_mode" = "true" ]; then
       echo "Mode: $(color_gray "force refresh enabled")"
