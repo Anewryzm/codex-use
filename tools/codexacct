@@ -12,7 +12,7 @@ codexacct - Multi-account profile manager for Codex default home
 
 Usage:
   codexacct login <profile> [--device-auth|extra codex login flags]
-  codexacct use <profile> [--force] [--relaunch]
+  codexacct use <profile> [--force] [--relaunch] [--from-action]
   codexacct usage [--json]
   codexacct pricing show
   codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
@@ -224,6 +224,69 @@ quit_codex_app() {
 
 open_codex_app() {
   open -a Codex >/dev/null 2>&1
+}
+
+force_quit_codex_app() {
+  pkill -TERM -f "/Applications/Codex.app/Contents/MacOS/Codex" >/dev/null 2>&1 || true
+
+  local i
+  for i in $(seq 1 20); do
+    if ! is_codex_app_running; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  pkill -KILL -f "/Applications/Codex.app/Contents/MacOS/Codex" >/dev/null 2>&1 || true
+  for i in $(seq 1 20); do
+    if ! is_codex_app_running; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  return 1
+}
+
+close_codex_app_for_relaunch() {
+  if ! is_codex_app_running; then
+    return 0
+  fi
+
+  if quit_codex_app; then
+    return 0
+  fi
+
+  echo "Codex App did not close cleanly. Retrying with force quit..."
+  force_quit_codex_app
+}
+
+close_terminal_tab_for_current_tty() {
+  if [ "${TERM_PROGRAM:-}" != "Apple_Terminal" ]; then
+    return 1
+  fi
+
+  local this_tty
+  this_tty="$(tty 2>/dev/null || true)"
+  [ -n "$this_tty" ] || return 1
+
+  osascript - "$this_tty" <<'APPLESCRIPT' >/dev/null 2>&1 &
+on run argv
+  set targetTty to item 1 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is targetTty then
+          close t
+          return
+        end if
+      end repeat
+    end repeat
+  end tell
+end run
+APPLESCRIPT
+  disown >/dev/null 2>&1 || true
+  return 0
 }
 
 auth_fingerprint() {
@@ -1535,12 +1598,13 @@ cmd_login() {
 cmd_use() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codexacct use <profile> [--force] [--relaunch]"
+  [ -n "$profile" ] || die "Usage: codexacct use <profile> [--force] [--relaunch] [--from-action]"
   validate_profile "$profile"
   ensure_dirs
 
   local force="false"
   local relaunch="false"
+  local from_action="false"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --force)
@@ -1549,8 +1613,11 @@ cmd_use() {
       --relaunch|--restart-app)
         relaunch="true"
         ;;
+      --from-action|--codex-action)
+        from_action="true"
+        ;;
       *)
-        die "Unknown option '$1'. Usage: codexacct use <profile> [--force] [--relaunch]"
+        die "Unknown option '$1'. Usage: codexacct use <profile> [--force] [--relaunch] [--from-action]"
         ;;
     esac
     shift
@@ -1566,8 +1633,8 @@ cmd_use() {
   if is_codex_app_running; then
     if [ "$relaunch" = "true" ]; then
       echo "Codex App is running. Closing it before switch..."
-      if ! quit_codex_app; then
-        die "Could not close Codex App cleanly. Close it manually and retry."
+      if ! close_codex_app_for_relaunch; then
+        die "Could not close Codex App cleanly after retries. Close it manually and retry."
       fi
     elif [ "$force" != "true" ]; then
       die "Codex App is running. Close it first, or use 'codexacct use $profile --relaunch' (recommended) or '--force' if you accept in-flight risk."
@@ -1600,6 +1667,13 @@ cmd_use() {
   if [ "$relaunch" = "true" ]; then
     if open_codex_app; then
       echo "Codex App relaunched to pick up the new default auth."
+      if [ "$from_action" = "true" ]; then
+        if close_terminal_tab_for_current_tty; then
+          exit 0
+        else
+          echo "Switched via Action mode, but could not auto-close this terminal tab."
+        fi
+      fi
     else
       echo "Switched auth, but failed to relaunch Codex App automatically. Open it manually."
     fi

@@ -14,6 +14,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `tools/codexacct use personal`
 - `tools/codexacct use trabajo`
 - `tools/codexacct use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
+- `tools/codexacct use trabajo --relaunch --from-action` (para Actions: relanza app y cierra la pestaña de Terminal en éxito)
 
 3. Ver usage/rate limits:
 - `tools/codexacct usage`
@@ -23,7 +24,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 
 ## Comandos disponibles
 - `tools/codexacct login <profile>`
-- `tools/codexacct use <profile> [--force] [--relaunch]`
+- `tools/codexacct use <profile> [--force] [--relaunch] [--from-action]`
 - `tools/codexacct usage [--json]`
 - `tools/codexacct limits [profile|default] [--all] [--json] [--refresh]`
 - `tools/codexacct list`
@@ -37,6 +38,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - Evita cambiar cuenta con tareas activas en Codex App.
 - `--force` existe para casos avanzados y puede interrumpir sesiones en curso.
 - `--relaunch` cierra y vuelve a abrir Codex App para que la UI lea el nuevo `auth.json`.
+- `--from-action` está pensado para Codex Actions: tras un `--relaunch` exitoso, intenta cerrar automáticamente la pestaña actual de Terminal.
 - `usage` lee histórico local desde `~/.codex/sessions`.
 - `limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
 
