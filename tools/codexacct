@@ -842,20 +842,29 @@ cmd_use() {
     fi
   fi
 
+  local backup_notice=""
   if [ -f "$dst" ]; then
     local ts
     ts="$(date +%Y%m%d-%H%M%S)"
-    cp "$dst" "$BACKUP_DIR/auth.$ts.json"
-    chmod 600 "$BACKUP_DIR/auth.$ts.json" || true
-    echo "Backup created: $BACKUP_DIR/auth.$ts.json"
+    local backup_path
+    backup_path="$BACKUP_DIR/auth.$ts.json"
+    cp "$dst" "$backup_path"
+    chmod 600 "$backup_path" || true
+    backup_notice="Backup created: $backup_path"
   fi
 
   cp "$src" "$dst"
   chmod 600 "$dst" || true
 
-  echo "Default profile switched to '$profile'."
+  echo "$(color_green "Default profile switched to '")$(color_green_bold "$profile")$(color_green "'.")"
+  if [ -n "$backup_notice" ]; then
+    echo "$backup_notice"
+  fi
+  echo
   echo "--- auth summary (default) ---"
-  print_auth_summary "$dst"
+  echo
+  print_auth_summary_whoami "$dst"
+  echo
   if [ "$relaunch" = "true" ]; then
     if open_codex_app; then
       echo "Codex App relaunched to pick up the new default auth."
