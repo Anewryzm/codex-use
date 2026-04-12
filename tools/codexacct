@@ -14,7 +14,6 @@ Usage:
   codexacct login <profile> [--device-auth|extra codex login flags]
   codexacct use <profile> [--force] [--relaunch]
   codexacct usage [--json]
-  codexacct -u [--json]
   codexacct pricing show
   codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
   codexacct limits [profile|default] [--all] [--json] [--refresh]
@@ -1870,7 +1869,6 @@ main() {
     login) cmd_login "$@" ;;
     use) cmd_use "$@" ;;
     usage) cmd_usage usage "$@" ;;
-    -u) cmd_usage usage "$@" ;;
     limits) cmd_usage limits "$@" ;;
     pricing) cmd_pricing "$@" ;;
     list) cmd_list ;;
