@@ -877,6 +877,13 @@ cmd_use() {
 }
 
 cmd_usage() {
+  local command_mode="${1:-usage}"
+  if [ "$command_mode" = "usage" ] || [ "$command_mode" = "limits" ]; then
+    shift || true
+  else
+    command_mode="usage"
+  fi
+
   ensure_dirs
 
   local profile="default"
@@ -901,12 +908,12 @@ cmd_usage() {
         profile_set="true"
         ;;
       -h|--help)
-        echo "Usage: codexacct usage [profile|default] [--all] [--json] [--refresh]"
+        echo "Usage: codexacct $command_mode [profile|default] [--all] [--json] [--refresh]"
         echo "Examples:"
-        echo "  codexacct usage"
-        echo "  codexacct usage trabajo"
-        echo "  codexacct usage default --json"
-        echo "  codexacct usage --all"
+        echo "  codexacct $command_mode"
+        echo "  codexacct $command_mode trabajo"
+        echo "  codexacct $command_mode default --json"
+        echo "  codexacct $command_mode --all"
         return 0
         ;;
       *)
@@ -990,6 +997,17 @@ cmd_usage() {
   fi
 
   [ -f "$(auth_file "$target_home")" ] || die "No auth.json found for '$label' at $target_home"
+
+  if [ "$command_mode" = "limits" ] && [ "$json_mode" != "true" ]; then
+    echo "Target profile: $(color_green_bold "$label")"
+    echo "CODEX_HOME: $(color_gray "$target_home")"
+    if [ "$refresh_mode" = "true" ]; then
+      echo "Mode: $(color_gray "force refresh enabled")"
+    fi
+    echo
+    print_usage_details_for_home "$target_home" "$refresh_mode"
+    return 0
+  fi
 
   if [ "$json_mode" != "true" ]; then
     echo "Usage source: codex app-server RPC"
@@ -1133,7 +1151,8 @@ main() {
   case "$cmd" in
     login) cmd_login "$@" ;;
     use) cmd_use "$@" ;;
-    usage|limits) cmd_usage "$@" ;;
+    usage) cmd_usage usage "$@" ;;
+    limits) cmd_usage limits "$@" ;;
     list) cmd_list ;;
     whoami) cmd_whoami ;;
     status) cmd_status "$@" ;;

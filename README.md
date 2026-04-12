@@ -55,3 +55,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - límites de uso (`5h` y `weekly`) con porcentaje restante, barra horizontal y tiempo de renovación
 - resumen de créditos legible (`credits: none`, `credits: unlimited`, `credits: balance ...`)
 - Usa `--refresh` para forzar consulta fresca al backend antes de mostrar límites.
+
+## Salida de `limits`
+- `limits <profile>` (sin `--json`) usa salida legible tipo dashboard: barras de `5h` y `weekly`, renovación en lenguaje natural y resumen de créditos.
+- `limits --json` conserva salida JSON cruda para scripting/automatización.
