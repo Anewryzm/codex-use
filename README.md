@@ -15,18 +15,16 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `tools/codexacct use trabajo`
 - `tools/codexacct use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
 
-3. Ver usage/rate limits por perfil (tabla unificada, vía RPC):
-- `tools/codexacct usage default`
-- `tools/codexacct usage trabajo`
-- `tools/codexacct usage trabajo --json`
+3. Ver usage/rate limits:
+- `tools/codexacct usage`
+- `tools/codexacct usage --json`
 - `tools/codexacct limits trabajo --refresh`
-- `tools/codexacct usage --all` o `tools/codexacct usage -a` (tabla ASCII de todas las cuentas vinculadas)
 - `tools/codexacct limits --all` o `tools/codexacct limits -a` (vista compacta de límites por perfil)
 
 ## Comandos disponibles
 - `tools/codexacct login <profile>`
 - `tools/codexacct use <profile> [--force] [--relaunch]`
-- `tools/codexacct usage [profile|default] [--all] [--json] [--refresh]`
+- `tools/codexacct usage [--json]`
 - `tools/codexacct limits [profile|default] [--all] [--json] [--refresh]`
 - `tools/codexacct list`
 - `tools/codexacct whoami`
@@ -39,7 +37,8 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - Evita cambiar cuenta con tareas activas en Codex App.
 - `--force` existe para casos avanzados y puede interrumpir sesiones en curso.
 - `--relaunch` cierra y vuelve a abrir Codex App para que la UI lea el nuevo `auth.json`.
-- `usage/limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
+- `usage` lee histórico local desde `~/.codex/sessions`.
+- `limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
 
 ## Diagnóstico rápido cuando "no cambia la cuenta" en la app
 1. Ejecuta `tools/codexacct list`.
@@ -57,7 +56,12 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - resumen de créditos legible (`credits: none`, `credits: unlimited`, `credits: balance ...`)
 - Usa `--refresh` para forzar consulta fresca al backend antes de mostrar límites.
 
+## Salida de `usage`
+- `usage` muestra consumo histórico desde `~/.codex/sessions` en tabla compacta.
+- Columnas: `in(M)`, `out(M)`, `cach(M)` (millones de tokens). `out(M)` incluye reasoning.
+- `usage --json` entrega el agregado crudo (`totals` y `models`) para scripting.
+
 ## Salida de `limits`
-- `usage` y `limits` comparten la misma salida tabular cuando no usas `--json`.
-- `--all`/`-a` muestra tabla compacta por perfiles guardados (sin fila `default`) y una línea `Current default profile: <perfil>*`.
-- `usage --json` y `limits --json` conservan salida JSON cruda para scripting/automatización.
+- `limits <profile>` (sin `--json`) usa salida legible tipo dashboard: barras de `5h` y `weekly`, renovación en lenguaje natural y resumen de créditos.
+- `limits --all`/`limits -a` usa tabla compacta con columnas `profile`, `email`, `5h (reset)`, `weekly (reset)` y línea `Current default profile`.
+- `limits --json` conserva salida JSON cruda de rate limits para scripting/automatización.

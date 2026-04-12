@@ -13,7 +13,7 @@ codexacct - Multi-account profile manager for Codex default home
 Usage:
   codexacct login <profile> [--device-auth|extra codex login flags]
   codexacct use <profile> [--force] [--relaunch]
-  codexacct usage [profile|default] [--all] [--json] [--refresh]
+  codexacct usage [--json]
   codexacct limits [profile|default] [--all] [--json] [--refresh]
   codexacct list
   codexacct whoami
@@ -24,14 +24,15 @@ Usage:
 Core flow:
   1) Save credentials per profile:  codexacct login personal
   2) Switch active default account: codexacct use personal
-  3) Check usage/rate limits:       codexacct usage default
-  4) Compare all profiles:          codexacct usage --all
+  3) Check historical usage:        codexacct usage
+  4) Compare profile limits:        codexacct limits --all
 
 Notes:
   - Default Codex App + CLI home is: $DEFAULT_HOME
   - Profile homes are stored in:      $PROFILES_ROOT/<profile>
   - 'use' copies <profile>/auth.json into $DEFAULT_HOME/auth.json
-  - 'usage' uses Codex app-server RPC (account/read + account/rateLimits/read)
+  - 'usage' reads local session logs from: $HOME/.codex/sessions
+  - 'limits' uses Codex app-server RPC (account/read + account/rateLimits/read)
 USAGE
 }
 
@@ -818,6 +819,230 @@ print_usage_table_footer() {
   printf '+------------+---------------------------------+------------------+-----------------+\n'
 }
 
+historical_usage_json() {
+  local sessions_root="$HOME/.codex/sessions"
+  node - "$sessions_root" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const sessionsRoot = process.argv[2];
+
+function walkJsonlFiles(dir, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walkJsonlFiles(p, out);
+    else if (e.isFile() && p.endsWith('.jsonl')) out.push(p);
+  }
+  return out;
+}
+
+function asNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const files = walkJsonlFiles(sessionsRoot).sort();
+const bySession = new Map();
+
+for (const file of files) {
+  let content = '';
+  try {
+    content = fs.readFileSync(file, 'utf8');
+  } catch {
+    continue;
+  }
+  if (!content) continue;
+
+  const lines = content.split('\n');
+  let sessionId = null;
+  let model = 'unknown';
+  let best = null;
+
+  for (const line of lines) {
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (event.type === 'session_meta') {
+      sessionId = event?.payload?.id || sessionId;
+    }
+
+    if (event.type === 'turn_context' && event?.payload?.model) {
+      model = event.payload.model;
+    }
+
+    if (event.type === 'event_msg' && event?.payload?.type === 'token_count') {
+      const t = event?.payload?.info?.total_token_usage;
+      if (!t || typeof t !== 'object') continue;
+
+      const candidate = {
+        input: asNumber(t.input_tokens),
+        cached: asNumber(t.cached_input_tokens),
+        output: asNumber(t.output_tokens),
+        reasoning: asNumber(t.reasoning_output_tokens),
+        total: asNumber(t.total_tokens),
+      };
+
+      if (!best || candidate.total >= best.total) {
+        best = candidate;
+      }
+    }
+  }
+
+  if (!best) continue;
+  const key = sessionId || file;
+  const existing = bySession.get(key);
+  if (!existing || best.total >= existing.total) {
+    bySession.set(key, {
+      model,
+      ...best,
+    });
+  }
+}
+
+const totals = {
+  input: 0,
+  cached: 0,
+  output: 0,
+  reasoning: 0,
+  outputWithReasoning: 0,
+  total: 0,
+  sessions: 0,
+};
+
+const byModel = new Map();
+for (const row of bySession.values()) {
+  const outWithReasoning = row.output + row.reasoning;
+  totals.input += row.input;
+  totals.cached += row.cached;
+  totals.output += row.output;
+  totals.reasoning += row.reasoning;
+  totals.outputWithReasoning += outWithReasoning;
+  totals.total += row.total;
+  totals.sessions += 1;
+
+  const key = row.model || 'unknown';
+  const m = byModel.get(key) || {
+    model: key,
+    sessions: 0,
+    input: 0,
+    cached: 0,
+    output: 0,
+    reasoning: 0,
+    outputWithReasoning: 0,
+    total: 0,
+  };
+  m.sessions += 1;
+  m.input += row.input;
+  m.cached += row.cached;
+  m.output += row.output;
+  m.reasoning += row.reasoning;
+  m.outputWithReasoning += outWithReasoning;
+  m.total += row.total;
+  byModel.set(key, m);
+}
+
+const models = Array.from(byModel.values()).sort((a, b) => b.total - a.total);
+
+const out = {
+  source: 'local-session-jsonl',
+  sessionsRoot,
+  filesScanned: files.length,
+  sessionsCounted: totals.sessions,
+  totals,
+  models,
+};
+
+console.log(JSON.stringify(out, null, 2));
+NODE
+}
+
+historical_usage_to_tsv() {
+  node -e '
+const fs = require("fs");
+const raw = fs.readFileSync(0, "utf8");
+const data = JSON.parse(raw);
+
+function toM(n) {
+  return (Number(n || 0) / 1_000_000).toFixed(3);
+}
+
+const rows = [];
+const totals = data?.totals || {};
+rows.push([
+  "TOTAL",
+  String(totals.sessions || 0),
+  toM(totals.input),
+  toM(totals.outputWithReasoning),
+  toM(totals.cached),
+]);
+
+for (const m of (data?.models || [])) {
+  rows.push([
+    m.model || "unknown",
+    String(m.sessions || 0),
+    toM(m.input),
+    toM(m.outputWithReasoning),
+    toM(m.cached),
+  ]);
+}
+
+for (const r of rows) {
+  process.stdout.write(r.join("\t") + "\n");
+}
+'
+}
+
+print_historical_usage_table_header() {
+  printf '+---------------+------+----------+----------+----------+\n'
+  printf '| %-13s | %-4s | %-8s | %-8s | %-8s |\n' \
+    "scope" "ses" "in(M)" "out(M)" "cach(M)"
+  printf '+---------------+------+----------+----------+----------+\n'
+}
+
+print_historical_usage_table_row() {
+  local scope="$1"
+  local sessions="$2"
+  local input_m="$3"
+  local output_m="$4"
+  local cached_m="$5"
+  printf '| %-13s | %-4s | %-8s | %-8s | %-8s |\n' \
+    "$(crop_cell "$scope" 13)" \
+    "$(crop_cell "$sessions" 4)" \
+    "$(crop_cell "$input_m" 8)" \
+    "$(crop_cell "$output_m" 8)" \
+    "$(crop_cell "$cached_m" 8)"
+}
+
+print_historical_usage_table_footer() {
+  printf '+---------------+------+----------+----------+----------+\n'
+}
+
+print_historical_usage_table() {
+  local usage_json usage_rows
+  usage_json="$(historical_usage_json)"
+  usage_rows="$(printf "%s" "$usage_json" | historical_usage_to_tsv 2>/dev/null || true)"
+
+  if [ -z "$usage_rows" ]; then
+    echo "No historical usage data found."
+    return 0
+  fi
+
+  print_historical_usage_table_header
+  while IFS=$'\t' read -r scope sessions input_m output_m cached_m; do
+    [ -n "$scope" ] || continue
+    print_historical_usage_table_row "$scope" "$sessions" "$input_m" "$output_m" "$cached_m"
+  done <<< "$usage_rows"
+  print_historical_usage_table_footer
+  echo "Note: out(M) includes reasoning output."
+}
+
 print_current_default_profile_line() {
   local active_profile_for_default="$1"
   if [ -n "$active_profile_for_default" ]; then
@@ -1006,13 +1231,20 @@ cmd_usage() {
         profile_set="true"
         ;;
       -h|--help)
-        echo "Usage: codexacct $command_mode [profile|default] [--all] [--json] [--refresh]"
-        echo "Examples:"
-        echo "  codexacct $command_mode"
-        echo "  codexacct $command_mode trabajo"
-        echo "  codexacct $command_mode default --json"
-        echo "  codexacct $command_mode --all"
-        echo "  codexacct $command_mode -a"
+        if [ "$command_mode" = "usage" ]; then
+          echo "Usage: codexacct usage [--json]"
+          echo "Examples:"
+          echo "  codexacct usage"
+          echo "  codexacct usage --json"
+        else
+          echo "Usage: codexacct limits [profile|default] [--all|-a] [--json] [--refresh]"
+          echo "Examples:"
+          echo "  codexacct limits"
+          echo "  codexacct limits trabajo"
+          echo "  codexacct limits default --json"
+          echo "  codexacct limits --all"
+          echo "  codexacct limits -a"
+        fi
         return 0
         ;;
       *)
@@ -1028,6 +1260,16 @@ cmd_usage() {
     esac
     shift
   done
+
+  if [ "$command_mode" = "usage" ]; then
+    if [ "$json_mode" = "true" ]; then
+      historical_usage_json
+      return 0
+    fi
+
+    print_historical_usage_table
+    return 0
+  fi
 
   if [ "$all_mode" = "true" ]; then
     [ "$json_mode" != "true" ] || die "--all does not support --json yet."
