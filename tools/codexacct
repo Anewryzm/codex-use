@@ -970,19 +970,13 @@ const raw = fs.readFileSync(0, "utf8");
 const data = JSON.parse(raw);
 
 function toM(n) {
-  return (Number(n || 0) / 1_000_000).toFixed(3);
+  const m = Number(n || 0) / 1_000_000;
+  const oneDecimalTrunc = Math.trunc(m * 10) / 10;
+  return `${oneDecimalTrunc.toFixed(1)}M`;
 }
 
 const rows = [];
 const totals = data?.totals || {};
-rows.push([
-  "TOTAL",
-  String(totals.sessions || 0),
-  toM(totals.input),
-  toM(totals.outputWithReasoning),
-  toM(totals.cached),
-]);
-
 for (const m of (data?.models || [])) {
   rows.push([
     m.model || "unknown",
@@ -992,6 +986,14 @@ for (const m of (data?.models || [])) {
     toM(m.cached),
   ]);
 }
+
+rows.push([
+  "TOTAL",
+  String(totals.sessions || 0),
+  toM(totals.input),
+  toM(totals.outputWithReasoning),
+  toM(totals.cached),
+]);
 
 for (const r of rows) {
   process.stdout.write(r.join("\t") + "\n");
@@ -1035,10 +1037,24 @@ print_historical_usage_table() {
   fi
 
   print_historical_usage_table_header
+  local total_scope="" total_sessions="" total_input="" total_output="" total_cached=""
   while IFS=$'\t' read -r scope sessions input_m output_m cached_m; do
     [ -n "$scope" ] || continue
+    if [ "$scope" = "TOTAL" ]; then
+      total_scope="$scope"
+      total_sessions="$sessions"
+      total_input="$input_m"
+      total_output="$output_m"
+      total_cached="$cached_m"
+      continue
+    fi
     print_historical_usage_table_row "$scope" "$sessions" "$input_m" "$output_m" "$cached_m"
   done <<< "$usage_rows"
+
+  if [ -n "$total_scope" ]; then
+    print_historical_usage_table_footer
+    print_historical_usage_table_row "$total_scope" "$total_sessions" "$total_input" "$total_output" "$total_cached"
+  fi
   print_historical_usage_table_footer
   echo "Note: out(M) includes reasoning output."
 }
