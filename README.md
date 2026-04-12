@@ -1,35 +1,35 @@
 # codex-use
 
-Script para gestionar múltiples cuentas de Codex por perfil y promover una cuenta al perfil default (`~/.codex`) que usa Codex App + Codex CLI sin `CODEX_HOME`.
+CLI to manage multiple Codex accounts by profile and promote one account to the default profile (`~/.codex`) used by Codex App + Codex CLI when `CODEX_HOME` is not set.
 
-## Instalación (npm)
+## Install (npm)
 - `npm i -g @anewryzm/codex-use`
 
-## Comandos
-- Principal: `codex-use`
-- Alias corto: `cdex`
+## Commands
+- Primary: `codex-use`
+- Short alias: `cdex`
 
-## Archivo principal
+## Main file
 - `tools/codex-use`
 
-## Flujo principal
-1. Guardar login por perfil:
+## Core flow
+1. Save login per profile:
 - `codex-use login personal`
-- `codex-use login trabajo`
+- `codex-use login work`
 
-2. Cambiar cuenta activa del default:
+2. Switch the active default account:
 - `codex-use use personal`
-- `codex-use use trabajo`
-- `codex-use use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
-- `codex-use use trabajo --relaunch --from-action` (para Actions: relanza app y cierra la pestaña de Terminal en éxito)
+- `codex-use use work`
+- `codex-use use work --relaunch` (recommended so Codex App refreshes the session automatically)
+- `codex-use use work --relaunch --from-action` (for Actions: relaunches the app and closes the Terminal tab on success)
 
-3. Ver usage/rate limits:
+3. Check usage/rate limits:
 - `codex-use usage`
 - `codex-use usage --json`
-- `codex-use limits trabajo --refresh`
-- `codex-use limits --all` o `codex-use limits -a` (vista compacta de límites por perfil)
+- `codex-use limits work --refresh`
+- `codex-use limits --all` or `codex-use limits -a` (compact limits view by profile)
 
-## Comandos disponibles
+## Available commands
 - `codex-use login <profile>`
 - `codex-use use <profile> [--force] [--relaunch] [--from-action]`
 - `codex-use usage [--json]`
@@ -40,37 +40,37 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `codex-use logout <profile>`
 - `codex-use logout-default`
 
-## Notas de seguridad
-- `use` crea backup automático de `~/.codex/auth.json` en `~/.codex/backups/`.
-- Evita cambiar cuenta con tareas activas en Codex App.
-- `--force` existe para casos avanzados y puede interrumpir sesiones en curso.
-- `--relaunch` cierra y vuelve a abrir Codex App para que la UI lea el nuevo `auth.json`.
-- `--from-action` está pensado para Codex Actions: tras un `--relaunch` exitoso, intenta cerrar automáticamente la pestaña actual de Terminal.
-- `usage` lee histórico local desde `~/.codex/sessions`.
-- `limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
+## Security notes
+- `use` creates an automatic backup of `~/.codex/auth.json` in `~/.codex/backups/`.
+- Avoid switching accounts while there are active tasks in Codex App.
+- `--force` exists for advanced cases and may interrupt in-flight sessions.
+- `--relaunch` closes and reopens Codex App so the UI reads the new `auth.json`.
+- `--from-action` is intended for Codex Actions: after a successful `--relaunch`, it tries to auto-close the current Terminal tab.
+- `usage` reads local history from `~/.codex/sessions`.
+- `limits` queries `codex app-server` using JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
 
-## Diagnóstico rápido cuando "no cambia la cuenta" en la app
-1. Ejecuta `codex-use list`.
-2. Revisa la leyenda:
-- `[*]` = el perfil usa exactamente el mismo token que `~/.codex`.
-- `[~]` = mismo `account_id`, pero token/identidad distinta.
-3. Si haces switch con la app abierta, usa `codex-use use <profile> --relaunch`.
-4. Ejecuta `codex-use whoami` para ver `Active profile` además de email/plan/account.
+## Quick troubleshooting when "the account did not change" in the app
+1. Run `codex-use list`.
+2. Check the legend:
+- `[*]` = the profile uses exactly the same token as `~/.codex`.
+- `[~]` = same `account_id`, but different token/identity.
+3. If you switch while the app is open, use `codex-use use <profile> --relaunch`.
+4. Run `codex-use whoami` to see `Active profile` plus email/plan/account.
 
-## Diferencia entre `whoami` y `status`
-- `whoami`: vista rápida del perfil activo en `~/.codex` (cuenta que usa la app/CLI por defecto).
-- `status <profile>`: diagnóstico de un perfil específico en `~/.codex-profiles/<profile>`, incluyendo:
-- resumen de identidad (`plan`, `default_org`, `email`, `account_id`)
-- límites de uso (`5h` y `weekly`) con porcentaje restante, barra horizontal y tiempo de renovación
-- resumen de créditos legible (`credits: none`, `credits: unlimited`, `credits: balance ...`)
-- Usa `--refresh` para forzar consulta fresca al backend antes de mostrar límites.
+## Difference between `whoami` and `status`
+- `whoami`: quick view of the active profile in `~/.codex` (the account used by app/CLI by default).
+- `status <profile>`: diagnostics for a specific profile in `~/.codex-profiles/<profile>`, including:
+- identity summary (`plan`, `default_org`, `email`, `account_id`)
+- usage limits (`5h` and `weekly`) with remaining percentage, horizontal bar, and reset timing
+- readable credits summary (`credits: none`, `credits: unlimited`, `credits: balance ...`)
+- Use `--refresh` to force a fresh backend query before showing limits.
 
-## Salida de `usage`
-- `usage` muestra consumo histórico desde `~/.codex/sessions` en tabla compacta.
-- Columnas: `in(M)`, `out(M)`, `cach(M)` (millones de tokens). `out(M)` incluye reasoning.
-- `usage --json` entrega el agregado crudo (`totals` y `models`) para scripting.
+## `usage` output
+- `usage` shows historical consumption from `~/.codex/sessions` in a compact table.
+- Columns: `in(M)`, `out(M)`, `cach(M)` (millions of tokens). `out(M)` includes reasoning.
+- `usage --json` returns the raw aggregate (`totals` and `models`) for scripting.
 
-## Salida de `limits`
-- `limits <profile>` (sin `--json`) usa salida legible tipo dashboard: barras de `5h` y `weekly`, renovación en lenguaje natural y resumen de créditos.
-- `limits --all`/`limits -a` usa tabla compacta con columnas `profile`, `email`, `5h (reset)`, `weekly (reset)` y línea `Current default profile`.
-- `limits --json` conserva salida JSON cruda de rate limits para scripting/automatización.
+## `limits` output
+- `limits <profile>` (without `--json`) shows dashboard-style output: `5h` and `weekly` bars, natural-language reset, and credits summary.
+- `limits --all`/`limits -a` shows a compact table with columns `profile`, `email`, `5h (reset)`, `weekly (reset)` and a `Current default profile` line.
+- `limits --json` keeps the raw JSON output from rate limits for scripting/automation.
