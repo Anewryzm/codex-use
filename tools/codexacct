@@ -866,7 +866,9 @@ for (const file of files) {
     } catch {
       continue;
     }
-    if (event.type === 'session_meta') {
+    if (event.type === 'session_meta' && !sessionId) {
+      // A rollout file can include replayed history with older session_meta entries.
+      // Keep the first session id (owner of the file), not later replayed ones.
       sessionId = event?.payload?.id || sessionId;
     }
     if (event.type === 'event_msg' && event?.payload?.type === 'token_count') {
