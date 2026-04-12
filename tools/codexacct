@@ -959,16 +959,24 @@ cmd_usage() {
     if [ "$refresh_mode" = "true" ]; then
       echo "Mode: force refresh enabled"
     fi
-    echo
-
-    print_usage_table_header
     local active_profile_for_default
     active_profile_for_default="$(detect_active_profile)"
     if [[ "$active_profile_for_default" == *"("* ]] || [[ "$active_profile_for_default" == "(not logged in)" ]] || [[ "$active_profile_for_default" == "(unmapped)" ]]; then
       active_profile_for_default=""
     fi
+    if [ -n "$active_profile_for_default" ]; then
+      echo "Current default profile: $(color_green_bold "${active_profile_for_default}*")"
+    else
+      echo "Current default profile: $(color_gray "unknown")"
+    fi
+    echo
+
+    print_usage_table_header
     while IFS='|' read -r label target_home; do
       [ -n "$label" ] || continue
+      if [ "$label" = "default" ]; then
+        continue
+      fi
       local display_label="$label"
       if [ -n "$active_profile_for_default" ] && [ "$label" = "$active_profile_for_default" ]; then
         display_label="${label}*"
