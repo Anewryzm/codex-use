@@ -52,5 +52,6 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `whoami`: vista rápida del perfil activo en `~/.codex` (cuenta que usa la app/CLI por defecto).
 - `status <profile>`: diagnóstico de un perfil específico en `~/.codex-profiles/<profile>`, incluyendo:
 - resumen de identidad (`plan`, `default_org`, `email`, `account_id`)
-- límites de uso (`5h` y `weekly`) con porcentaje restante/usado y tiempo de renovación
+- límites de uso (`5h` y `weekly`) con porcentaje restante, barra horizontal y tiempo de renovación
+- resumen de créditos legible (`credits: none`, `credits: unlimited`, `credits: balance ...`)
 - Usa `--refresh` para forzar consulta fresca al backend antes de mostrar límites.
