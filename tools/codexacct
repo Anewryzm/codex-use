@@ -308,6 +308,28 @@ detect_active_profile() {
   echo "(unmapped)"
 }
 
+normalized_active_profile() {
+  local active_profile
+  active_profile="$(detect_active_profile)"
+
+  if [ -z "$active_profile" ]; then
+    echo ""
+    return 0
+  fi
+
+  if [ "$active_profile" = "(not logged in)" ] || [ "$active_profile" = "(unmapped)" ]; then
+    echo ""
+    return 0
+  fi
+
+  if [[ "$active_profile" == *"("* ]]; then
+    echo ""
+    return 0
+  fi
+
+  echo "$active_profile"
+}
+
 print_auth_summary() {
   local auth_path="$1"
   [ -f "$auth_path" ] || {
@@ -796,6 +818,64 @@ print_usage_table_footer() {
   printf '+------------+---------------------------------+------------------+-----------------+\n'
 }
 
+print_current_default_profile_line() {
+  local active_profile_for_default="$1"
+  if [ -n "$active_profile_for_default" ]; then
+    echo "Current default profile: $(color_green_bold "${active_profile_for_default}*")"
+  else
+    echo "Current default profile: $(color_gray "unknown")"
+  fi
+}
+
+print_usage_table_row_for_home() {
+  local label="$1"
+  local target_home="$2"
+  local refresh_mode="$3"
+  local mark_active="${4:-false}"
+
+  local display_label="$label"
+  if [ "$mark_active" = "true" ]; then
+    display_label="${display_label}*"
+  fi
+
+  local target_auth
+  target_auth="$(auth_file "$target_home")"
+  if [ ! -f "$target_auth" ]; then
+    print_usage_table_row "$display_label" "no-auth" "-" "-" "false"
+    return 0
+  fi
+
+  local rpc_json rpc_err tsv err_file
+  err_file="$(mktemp)"
+  if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+    if tsv="$(printf "%s" "$rpc_json" | json_usage_to_tsv 2>/dev/null)"; then
+      local email plan p_left p_reset s_left s_reset five_h_cell weekly_cell
+      IFS=$'\t' read -r email plan p_left p_reset s_left s_reset <<<"$tsv"
+      five_h_cell="$(compact_window_cell "$p_left" "$p_reset")"
+      weekly_cell="$(compact_window_cell "$s_left" "$s_reset")"
+      print_usage_table_row "$display_label" "$email" "$five_h_cell" "$weekly_cell" "true"
+    else
+      print_usage_table_row "$display_label" "parse-error" "-" "-" "false"
+    fi
+  else
+    rpc_err="$(cat "$err_file")"
+    rpc_err="$(echo "$rpc_err" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+    local err_lc status
+    err_lc="$(printf "%s" "$rpc_err" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]]; then
+      status="not-logged"
+    elif [[ "$err_lc" == *"no rate limit snapshot"* ]]; then
+      status="no-limits"
+    elif [[ "$err_lc" == *"timeout"* ]]; then
+      status="timeout"
+    else
+      status="rpc-error"
+    fi
+    print_usage_table_row "$display_label" "$status" "-" "-" "false"
+  fi
+  rm -f "$err_file"
+}
+
 cmd_login() {
   local profile="${1:-}"
   shift || true
@@ -953,22 +1033,9 @@ cmd_usage() {
     [ "$json_mode" != "true" ] || die "--all does not support --json yet."
     [ "$profile_set" != "true" ] || die "Do not pass profile/default with --all."
 
-    echo "Usage source: codex app-server RPC"
-    echo "Target profile: all"
-    echo "Profiles root: $PROFILES_ROOT"
-    if [ "$refresh_mode" = "true" ]; then
-      echo "Mode: force refresh enabled"
-    fi
     local active_profile_for_default
-    active_profile_for_default="$(detect_active_profile)"
-    if [[ "$active_profile_for_default" == *"("* ]] || [[ "$active_profile_for_default" == "(not logged in)" ]] || [[ "$active_profile_for_default" == "(unmapped)" ]]; then
-      active_profile_for_default=""
-    fi
-    if [ -n "$active_profile_for_default" ]; then
-      echo "Current default profile: $(color_green_bold "${active_profile_for_default}*")"
-    else
-      echo "Current default profile: $(color_gray "unknown")"
-    fi
+    active_profile_for_default="$(normalized_active_profile)"
+    print_current_default_profile_line "$active_profile_for_default"
     echo
 
     print_usage_table_header
@@ -977,47 +1044,11 @@ cmd_usage() {
       if [ "$label" = "default" ]; then
         continue
       fi
-      local display_label="$label"
+      local mark_active="false"
       if [ -n "$active_profile_for_default" ] && [ "$label" = "$active_profile_for_default" ]; then
-        display_label="${label}*"
+        mark_active="true"
       fi
-
-      local target_auth
-      target_auth="$(auth_file "$target_home")"
-      if [ ! -f "$target_auth" ]; then
-        print_usage_table_row "$display_label" "no-auth" "-" "-" "false"
-        continue
-      fi
-
-      local rpc_json rpc_err tsv err_file
-      err_file="$(mktemp)"
-      if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
-        if tsv="$(printf "%s" "$rpc_json" | json_usage_to_tsv 2>/dev/null)"; then
-          local email plan p_left p_reset s_left s_reset five_h_cell weekly_cell
-          IFS=$'\t' read -r email plan p_left p_reset s_left s_reset <<<"$tsv"
-          five_h_cell="$(compact_window_cell "$p_left" "$p_reset")"
-          weekly_cell="$(compact_window_cell "$s_left" "$s_reset")"
-          print_usage_table_row "$display_label" "$email" "$five_h_cell" "$weekly_cell" "true"
-        else
-          print_usage_table_row "$display_label" "parse-error" "-" "-" "false"
-        fi
-      else
-        rpc_err="$(cat "$err_file")"
-        rpc_err="$(echo "$rpc_err" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
-        local err_lc status
-        err_lc="$(printf "%s" "$rpc_err" | tr '[:upper:]' '[:lower:]')"
-        if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]]; then
-          status="not-logged"
-        elif [[ "$err_lc" == *"no rate limit snapshot"* ]]; then
-          status="no-limits"
-        elif [[ "$err_lc" == *"timeout"* ]]; then
-          status="timeout"
-        else
-          status="rpc-error"
-        fi
-        print_usage_table_row "$display_label" "$status" "-" "-" "false"
-      fi
-      rm -f "$err_file"
+      print_usage_table_row_for_home "$label" "$target_home" "$refresh_mode" "$mark_active"
     done < <(collect_usage_targets)
     print_usage_table_footer
     return 0
@@ -1036,33 +1067,19 @@ cmd_usage() {
 
   [ -f "$(auth_file "$target_home")" ] || die "No auth.json found for '$label' at $target_home"
 
-  if [ "$command_mode" = "limits" ] && [ "$json_mode" != "true" ]; then
-    local label_with_profile="$label"
-    if [ "$label" = "default" ]; then
-      local active_profile
-      active_profile="$(detect_active_profile)"
-      if [ "$active_profile" != "(not logged in)" ] && [ -n "$active_profile" ]; then
-        label_with_profile="$label ($active_profile)"
-      fi
-    fi
-    echo "Target profile: $(color_green_bold "$label_with_profile")"
-    echo "CODEX_HOME: $(color_gray "$target_home")"
-    if [ "$refresh_mode" = "true" ]; then
-      echo "Mode: $(color_gray "force refresh enabled")"
-    fi
-    echo
-    print_usage_details_for_home "$target_home" "$refresh_mode"
-    return 0
-  fi
-
   if [ "$json_mode" != "true" ]; then
-    echo "Usage source: codex app-server RPC"
-    echo "Target profile: $label"
-    echo "CODEX_HOME: $target_home"
-    if [ "$refresh_mode" = "true" ]; then
-      echo "Mode: force refresh enabled"
-    fi
+    local active_profile_for_default
+    active_profile_for_default="$(normalized_active_profile)"
+    print_current_default_profile_line "$active_profile_for_default"
     echo
+    print_usage_table_header
+    local mark_active="false"
+    if [ "$label" != "default" ] && [ -n "$active_profile_for_default" ] && [ "$label" = "$active_profile_for_default" ]; then
+      mark_active="true"
+    fi
+    print_usage_table_row_for_home "$label" "$target_home" "$refresh_mode" "$mark_active"
+    print_usage_table_footer
+    return 0
   fi
 
   fetch_usage_via_rpc "$target_home" "$json_mode" "$refresh_mode"

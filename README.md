@@ -15,12 +15,13 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `tools/codexacct use trabajo`
 - `tools/codexacct use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
 
-3. Ver usage/rate limits por perfil (estilo CodexBar, vía RPC):
+3. Ver usage/rate limits por perfil (tabla unificada, vía RPC):
 - `tools/codexacct usage default`
 - `tools/codexacct usage trabajo`
 - `tools/codexacct usage trabajo --json`
 - `tools/codexacct limits trabajo --refresh`
-- `tools/codexacct usage --all` (tabla ASCII de todas las cuentas vinculadas)
+- `tools/codexacct usage --all` o `tools/codexacct usage -a` (tabla ASCII de todas las cuentas vinculadas)
+- `tools/codexacct limits --all` o `tools/codexacct limits -a` (vista compacta de límites por perfil)
 
 ## Comandos disponibles
 - `tools/codexacct login <profile>`
@@ -57,5 +58,6 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - Usa `--refresh` para forzar consulta fresca al backend antes de mostrar límites.
 
 ## Salida de `limits`
-- `limits <profile>` (sin `--json`) usa salida legible tipo dashboard: barras de `5h` y `weekly`, renovación en lenguaje natural y resumen de créditos.
-- `limits --json` conserva salida JSON cruda para scripting/automatización.
+- `usage` y `limits` comparten la misma salida tabular cuando no usas `--json`.
+- `--all`/`-a` muestra tabla compacta por perfiles guardados (sin fila `default`) y una línea `Current default profile: <perfil>*`.
+- `usage --json` y `limits --json` conservan salida JSON cruda para scripting/automatización.
