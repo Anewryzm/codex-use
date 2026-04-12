@@ -8,26 +8,26 @@ BACKUP_DIR="$DEFAULT_HOME/backups"
 
 usage() {
   cat <<USAGE
-codexacct - Multi-account profile manager for Codex default home
+codex-use - Multi-account profile manager for Codex default home
 
 Usage:
-  codexacct login <profile> [--device-auth|extra codex login flags]
-  codexacct use <profile> [--force] [--relaunch] [--from-action]
-  codexacct usage [--json]
-  codexacct pricing show
-  codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
-  codexacct limits [profile|default] [--all] [--json] [--refresh]
-  codexacct list
-  codexacct whoami
-  codexacct status <profile> [--refresh]
-  codexacct logout <profile>
-  codexacct logout-default
+  codex-use login <profile> [--device-auth|extra codex login flags]
+  codex-use use <profile> [--force] [--relaunch] [--from-action]
+  codex-use usage [--json]
+  codex-use pricing show
+  codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
+  codex-use limits [profile|default] [--all] [--json] [--refresh]
+  codex-use list
+  codex-use whoami
+  codex-use status <profile> [--refresh]
+  codex-use logout <profile>
+  codex-use logout-default
 
 Core flow:
-  1) Save credentials per profile:  codexacct login personal
-  2) Switch active default account: codexacct use personal
-  3) Check historical usage:        codexacct usage
-  4) Compare profile limits:        codexacct limits --all
+  1) Save credentials per profile:  codex-use login personal
+  2) Switch active default account: codex-use use personal
+  3) Check historical usage:        codex-use usage
+  4) Compare profile limits:        codex-use limits --all
 
 Notes:
   - Default Codex App + CLI home is: $DEFAULT_HOME
@@ -611,7 +611,7 @@ function resetText(epochSeconds) {
 (async () => {
   try {
     const init = await send('initialize', {
-      clientInfo: { name: 'codexacct', version: '0.2.0' },
+      clientInfo: { name: 'codex-use', version: '0.2.0' },
     });
 
     const accountResp = await send('account/read', { forceRefresh: refreshMode });
@@ -1352,7 +1352,7 @@ cmd_pricing() {
   case "$sub" in
     show)
       if [ "$#" -gt 0 ]; then
-        die "Usage: codexacct pricing show"
+        die "Usage: codex-use pricing show"
       fi
       local pricing_path
       pricing_path="$(pricing_file)"
@@ -1413,7 +1413,7 @@ NODE
     set)
       local model="${1:-}"
       shift || true
-      [ -n "$model" ] || die "Usage: codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+      [ -n "$model" ] || die "Usage: codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
 
       local in_val="" cache_val="" out_val=""
       while [ "$#" -gt 0 ]; do
@@ -1431,7 +1431,7 @@ NODE
             shift 2
             ;;
           *)
-            die "Unknown option '$1'. Usage: codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+            die "Unknown option '$1'. Usage: codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
             ;;
         esac
       done
@@ -1509,11 +1509,11 @@ NODE
       ;;
     help|-h|--help)
       echo "Usage:"
-      echo "  codexacct pricing show"
-      echo "  codexacct pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+      echo "  codex-use pricing show"
+      echo "  codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
       ;;
     *)
-      die "Unknown pricing subcommand '$sub'. Use: codexacct pricing show|set"
+      die "Unknown pricing subcommand '$sub'. Use: codex-use pricing show|set"
       ;;
   esac
 }
@@ -1579,7 +1579,7 @@ print_usage_table_row_for_home() {
 cmd_login() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codexacct login <profile> [extra login flags]"
+  [ -n "$profile" ] || die "Usage: codex-use login <profile> [extra login flags]"
   validate_profile "$profile"
   ensure_dirs
 
@@ -1598,7 +1598,7 @@ cmd_login() {
 cmd_use() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codexacct use <profile> [--force] [--relaunch] [--from-action]"
+  [ -n "$profile" ] || die "Usage: codex-use use <profile> [--force] [--relaunch] [--from-action]"
   validate_profile "$profile"
   ensure_dirs
 
@@ -1617,7 +1617,7 @@ cmd_use() {
         from_action="true"
         ;;
       *)
-        die "Unknown option '$1'. Usage: codexacct use <profile> [--force] [--relaunch] [--from-action]"
+        die "Unknown option '$1'. Usage: codex-use use <profile> [--force] [--relaunch] [--from-action]"
         ;;
     esac
     shift
@@ -1628,7 +1628,7 @@ cmd_use() {
   src="$(auth_file "$p_home")"
   dst="$(auth_file "$DEFAULT_HOME")"
 
-  [ -f "$src" ] || die "Profile '$profile' has no auth.json. Run: codexacct login $profile"
+  [ -f "$src" ] || die "Profile '$profile' has no auth.json. Run: codex-use login $profile"
 
   if is_codex_app_running; then
     if [ "$relaunch" = "true" ]; then
@@ -1637,7 +1637,7 @@ cmd_use() {
         die "Could not close Codex App cleanly after retries. Close it manually and retry."
       fi
     elif [ "$force" != "true" ]; then
-      die "Codex App is running. Close it first, or use 'codexacct use $profile --relaunch' (recommended) or '--force' if you accept in-flight risk."
+      die "Codex App is running. Close it first, or use 'codex-use use $profile --relaunch' (recommended) or '--force' if you accept in-flight risk."
     fi
   fi
 
@@ -1718,18 +1718,18 @@ cmd_usage() {
         ;;
       -h|--help)
         if [ "$command_mode" = "usage" ]; then
-          echo "Usage: codexacct usage [--json]"
+          echo "Usage: codex-use usage [--json]"
           echo "Examples:"
-          echo "  codexacct usage"
-          echo "  codexacct usage --json"
+          echo "  codex-use usage"
+          echo "  codex-use usage --json"
         else
-          echo "Usage: codexacct limits [profile|default] [--all|-a] [--json] [--refresh]"
+          echo "Usage: codex-use limits [profile|default] [--all|-a] [--json] [--refresh]"
           echo "Examples:"
-          echo "  codexacct limits"
-          echo "  codexacct limits trabajo"
-          echo "  codexacct limits default --json"
-          echo "  codexacct limits --all"
-          echo "  codexacct limits -a"
+          echo "  codex-use limits"
+          echo "  codex-use limits trabajo"
+          echo "  codex-use limits default --json"
+          echo "  codex-use limits --all"
+          echo "  codex-use limits -a"
         fi
         return 0
         ;;
@@ -1862,7 +1862,7 @@ cmd_list() {
   done
 
   if [ "$found" = "false" ]; then
-    echo "No profiles yet. Create one with: codexacct login <profile>"
+    echo "No profiles yet. Create one with: codex-use login <profile>"
   fi
 
   echo "Legend: '*' means exact same auth token as current default ~/.codex/auth.json"
@@ -1886,7 +1886,7 @@ cmd_whoami() {
 cmd_status() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codexacct status <profile> [--refresh]"
+  [ -n "$profile" ] || die "Usage: codex-use status <profile> [--refresh]"
   validate_profile "$profile"
 
   local refresh_mode="false"
@@ -1896,7 +1896,7 @@ cmd_status() {
         refresh_mode="true"
         ;;
       *)
-        die "Unknown option '$1'. Usage: codexacct status <profile> [--refresh]"
+        die "Unknown option '$1'. Usage: codex-use status <profile> [--refresh]"
         ;;
     esac
     shift
@@ -1922,7 +1922,7 @@ cmd_status() {
 
 cmd_logout() {
   local profile="${1:-}"
-  [ -n "$profile" ] || die "Usage: codexacct logout <profile>"
+  [ -n "$profile" ] || die "Usage: codex-use logout <profile>"
   validate_profile "$profile"
   local p_home
   p_home="$(profile_home "$profile")"
@@ -1951,7 +1951,7 @@ main() {
     logout) cmd_logout "$@" ;;
     logout-default) cmd_logout_default ;;
     help|-h|--help) usage ;;
-    *) die "Unknown command '$cmd'. Run: codexacct help" ;;
+    *) die "Unknown command '$cmd'. Run: codex-use help" ;;
   esac
 }
 

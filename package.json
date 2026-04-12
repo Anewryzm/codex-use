@@ -1,0 +1,25 @@
+{
+  "name": "@anewryzm/codex-use",
+  "version": "0.1.0",
+  "description": "CLI to manage multiple Codex profiles and switch the active account safely.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Anewryzm/codex-use.git"
+  },
+  "homepage": "https://github.com/Anewryzm/codex-use#readme",
+  "bugs": {
+    "url": "https://github.com/Anewryzm/codex-use/issues"
+  },
+  "bin": {
+    "codex-use": "tools/codex-use",
+    "cdex": "tools/codex-use"
+  },
+  "files": [
+    "tools/codex-use",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

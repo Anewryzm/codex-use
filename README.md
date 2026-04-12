@@ -1,37 +1,44 @@
-# codex-account-switch
+# codex-use
 
 Script para gestionar múltiples cuentas de Codex por perfil y promover una cuenta al perfil default (`~/.codex`) que usa Codex App + Codex CLI sin `CODEX_HOME`.
 
+## Instalación (npm)
+- `npm i -g @anewryzm/codex-use`
+
+## Comandos
+- Principal: `codex-use`
+- Alias corto: `cdex`
+
 ## Archivo principal
-- `tools/codexacct`
+- `tools/codex-use`
 
 ## Flujo principal
 1. Guardar login por perfil:
-- `tools/codexacct login personal`
-- `tools/codexacct login trabajo`
+- `codex-use login personal`
+- `codex-use login trabajo`
 
 2. Cambiar cuenta activa del default:
-- `tools/codexacct use personal`
-- `tools/codexacct use trabajo`
-- `tools/codexacct use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
-- `tools/codexacct use trabajo --relaunch --from-action` (para Actions: relanza app y cierra la pestaña de Terminal en éxito)
+- `codex-use use personal`
+- `codex-use use trabajo`
+- `codex-use use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
+- `codex-use use trabajo --relaunch --from-action` (para Actions: relanza app y cierra la pestaña de Terminal en éxito)
 
 3. Ver usage/rate limits:
-- `tools/codexacct usage`
-- `tools/codexacct usage --json`
-- `tools/codexacct limits trabajo --refresh`
-- `tools/codexacct limits --all` o `tools/codexacct limits -a` (vista compacta de límites por perfil)
+- `codex-use usage`
+- `codex-use usage --json`
+- `codex-use limits trabajo --refresh`
+- `codex-use limits --all` o `codex-use limits -a` (vista compacta de límites por perfil)
 
 ## Comandos disponibles
-- `tools/codexacct login <profile>`
-- `tools/codexacct use <profile> [--force] [--relaunch] [--from-action]`
-- `tools/codexacct usage [--json]`
-- `tools/codexacct limits [profile|default] [--all] [--json] [--refresh]`
-- `tools/codexacct list`
-- `tools/codexacct whoami`
-- `tools/codexacct status <profile> [--refresh]`
-- `tools/codexacct logout <profile>`
-- `tools/codexacct logout-default`
+- `codex-use login <profile>`
+- `codex-use use <profile> [--force] [--relaunch] [--from-action]`
+- `codex-use usage [--json]`
+- `codex-use limits [profile|default] [--all] [--json] [--refresh]`
+- `codex-use list`
+- `codex-use whoami`
+- `codex-use status <profile> [--refresh]`
+- `codex-use logout <profile>`
+- `codex-use logout-default`
 
 ## Notas de seguridad
 - `use` crea backup automático de `~/.codex/auth.json` en `~/.codex/backups/`.
@@ -43,12 +50,12 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
 
 ## Diagnóstico rápido cuando "no cambia la cuenta" en la app
-1. Ejecuta `tools/codexacct list`.
+1. Ejecuta `codex-use list`.
 2. Revisa la leyenda:
 - `[*]` = el perfil usa exactamente el mismo token que `~/.codex`.
 - `[~]` = mismo `account_id`, pero token/identidad distinta.
-3. Si haces switch con la app abierta, usa `tools/codexacct use <profile> --relaunch`.
-4. Ejecuta `tools/codexacct whoami` para ver `Active profile` además de email/plan/account.
+3. Si haces switch con la app abierta, usa `codex-use use <profile> --relaunch`.
+4. Ejecuta `codex-use whoami` para ver `Active profile` además de email/plan/account.
 
 ## Diferencia entre `whoami` y `status`
 - `whoami`: vista rápida del perfil activo en `~/.codex` (cuenta que usa la app/CLI por defecto).
