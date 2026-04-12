@@ -882,6 +882,7 @@ cmd_whoami() {
   echo "Default home: $(color_gray "$DEFAULT_HOME")"
   echo
   echo "--- auth summary (default) ---"
+  echo
   print_auth_summary_whoami "$d_auth"
 }
 
