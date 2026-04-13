@@ -88,7 +88,11 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 ## Salida de `backup status`
 - `backup status` muestra salud del respaldo con formato orientado a terminal (`key: value`): estado del repo/git, conteo de archivos origen vs backup, cobertura por `session_id` y deltas pendientes de copia/borrado.
 - `pending_copy_files` indica lo que se copiaría en modo default.
+- `pending_new_files` indica rollouts nuevos que aún no existen en backup.
+- `pending_modified_files` indica rollouts existentes que cambiaron (por ejemplo, cuando se añade más conversación al mismo `.jsonl`).
 - `pending_mirror_deletes` indica lo que se borraría solo en modo espejo con `--delete`.
+- `runtime_unflushed_activity` indica que hay actividad fresca de runtime (`logs_2.sqlite` / `state_5.sqlite`) más nueva que el último write en `sessions/*.jsonl`.
+- `runtime_vs_sessions_lag_seconds` indica cuántos segundos de desfase hay entre runtime y escritura en session logs.
 
 ## Notas del commit de `backup`
 - Los commits de `backup` ahora incluyen una sección `Session notes` con solo rollouts nuevos/modificados desde el commit anterior (no lista acumulativa infinita).

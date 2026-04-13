@@ -1803,6 +1803,56 @@ count_jsonl_files() {
   find "$root" -type f -name '*.jsonl' | wc -l | tr -d ' '
 }
 
+latest_mtime_epoch_for_pattern() {
+  local root="$1"
+  local pattern="$2"
+  local latest
+  latest="0"
+  if [ ! -d "$root" ]; then
+    echo "0"
+    return 0
+  fi
+  while IFS= read -r -d '' file_path; do
+    local mtime
+    mtime="$(stat -f '%m' "$file_path" 2>/dev/null || echo "0")"
+    if [ "$mtime" -gt "$latest" ] 2>/dev/null; then
+      latest="$mtime"
+    fi
+  done < <(find "$root" -type f -name "$pattern" -print0 2>/dev/null)
+  echo "$latest"
+}
+
+format_epoch_local() {
+  local epoch="$1"
+  if [ -z "$epoch" ] || [ "$epoch" -le 0 ] 2>/dev/null; then
+    echo "-"
+    return 0
+  fi
+  date -r "$epoch" +'%Y-%m-%d %H:%M:%S %z'
+}
+
+latest_runtime_epoch() {
+  local latest
+  latest="0"
+  local runtime_files
+  runtime_files=(
+    "$DEFAULT_HOME/logs_2.sqlite"
+    "$DEFAULT_HOME/state_5.sqlite"
+    "$DEFAULT_HOME/session_index.jsonl"
+  )
+  local file_path
+  for file_path in "${runtime_files[@]}"; do
+    if [ -f "$file_path" ]; then
+      local mtime
+      mtime="$(stat -f '%m' "$file_path" 2>/dev/null || echo "0")"
+      if [ "$mtime" -gt "$latest" ] 2>/dev/null; then
+        latest="$mtime"
+      fi
+    fi
+  done
+  echo "$latest"
+}
+
 backup_session_id_coverage_tsv() {
   local source_root="$1"
   local backup_root="$2"
@@ -1867,12 +1917,25 @@ process.stdout.write([
 NODE
 }
 
-backup_pending_copy_count() {
+backup_pending_copy_breakdown_tsv() {
   local source_root="$1"
   local backup_root="$2"
   mkdir -p "$backup_root"
-  rsync -ani --out-format='%n' "$source_root/" "$backup_root/" \
-    | awk '/\.jsonl$/ { c++ } END { print c+0 }'
+  rsync -anic --out-format='%i\t%n' "$source_root/" "$backup_root/" \
+    | awk -F '\t' '
+      /\.jsonl$/ {
+        item=$1
+        if (item ~ /^>f/) {
+          transfer++
+          if (item ~ /\+/) {
+            added++
+          } else {
+            modified++
+          }
+        }
+      }
+      END { print transfer+0 "\t" added+0 "\t" modified+0 }
+    '
 }
 
 backup_pending_delete_count() {
@@ -2030,6 +2093,23 @@ cmd_backup_status() {
   source_files="$(count_jsonl_files "$source_sessions")"
   backup_files="$(count_jsonl_files "$backup_sessions")"
 
+  local source_latest_epoch backup_latest_epoch runtime_latest_epoch
+  local source_latest_human backup_latest_human runtime_latest_human
+  source_latest_epoch="$(latest_mtime_epoch_for_pattern "$source_sessions" '*.jsonl')"
+  backup_latest_epoch="$(latest_mtime_epoch_for_pattern "$backup_sessions" '*.jsonl')"
+  runtime_latest_epoch="$(latest_runtime_epoch)"
+  source_latest_human="$(format_epoch_local "$source_latest_epoch")"
+  backup_latest_human="$(format_epoch_local "$backup_latest_epoch")"
+  runtime_latest_human="$(format_epoch_local "$runtime_latest_epoch")"
+
+  local runtime_unflushed_activity runtime_lag_seconds
+  runtime_unflushed_activity="no"
+  runtime_lag_seconds="0"
+  if [ "$runtime_latest_epoch" -gt "$source_latest_epoch" ] 2>/dev/null; then
+    runtime_unflushed_activity="yes"
+    runtime_lag_seconds="$((runtime_latest_epoch - source_latest_epoch))"
+  fi
+
   local source_ids backup_ids shared_ids coverage_pct
   source_ids="0"
   backup_ids="0"
@@ -2047,11 +2127,18 @@ cmd_backup_status() {
     fi
   fi
 
-  local pending_copy pending_delete
+  local pending_copy pending_new pending_modified pending_delete
   pending_copy="0"
+  pending_new="0"
+  pending_modified="0"
   pending_delete="0"
   if [ -d "$source_sessions" ]; then
-    pending_copy="$(backup_pending_copy_count "$source_sessions" "$backup_sessions")"
+    local copy_tsv
+    copy_tsv="$(backup_pending_copy_breakdown_tsv "$source_sessions" "$backup_sessions")"
+    IFS=$'\t' read -r pending_copy pending_new pending_modified <<<"$copy_tsv"
+    pending_copy="${pending_copy:-0}"
+    pending_new="${pending_new:-0}"
+    pending_modified="${pending_modified:-0}"
     pending_delete="$(backup_pending_delete_count "$source_sessions" "$backup_sessions")"
   fi
 
@@ -2079,8 +2166,15 @@ cmd_backup_status() {
   echo "session_ids_source: $source_ids"
   echo "session_ids_backup: $backup_ids"
   echo "session_id_coverage: ${coverage_pct}% ($shared_ids/$source_ids)"
+  echo "sessions_source_latest_write: $source_latest_human"
+  echo "sessions_backup_latest_write: $backup_latest_human"
+  echo "codex_runtime_latest_write: $runtime_latest_human"
+  echo "runtime_unflushed_activity: $runtime_unflushed_activity"
+  echo "runtime_vs_sessions_lag_seconds: $runtime_lag_seconds"
   echo
   echo "pending_copy_files (default mode): $pending_copy"
+  echo "pending_new_files (default mode): $pending_new"
+  echo "pending_modified_files (default mode): $pending_modified"
   echo "pending_mirror_deletes (--delete mode): $pending_delete"
 }
 

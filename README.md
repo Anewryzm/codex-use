@@ -88,7 +88,11 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 ## `backup status` output
 - `backup status` shows backup health in terminal-first format (`key: value`), including repo/git state, source vs backup file counts, session-id coverage, and pending copy/delete deltas.
 - `pending_copy_files` indicates what would be copied in default mode.
+- `pending_new_files` indicates brand-new rollouts not yet present in backup.
+- `pending_modified_files` indicates existing rollout files that changed (for example, more conversation appended to the same `.jsonl`).
 - `pending_mirror_deletes` indicates what would be removed only in `--delete` mirror mode.
+- `runtime_unflushed_activity` indicates there is fresh Codex runtime activity (`logs_2.sqlite` / `state_5.sqlite`) newer than the latest `sessions/*.jsonl` write.
+- `runtime_vs_sessions_lag_seconds` indicates how far runtime activity is ahead of session-log writes.
 
 ## `backup` commit notes
 - `backup` commits now include a `Session notes` section with only new/changed rollouts since the previous backup commit (not a cumulative list).
