@@ -32,6 +32,7 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 ## Available commands
 - `codex-use login <profile>`
 - `codex-use use <profile> [--force] [--relaunch] [--from-action]`
+- `codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]`
 - `codex-use usage [--json]`
 - `codex-use limits [profile|default] [--all] [--json] [--refresh]`
 - `codex-use list`
@@ -74,3 +75,11 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 - `limits <profile>` (without `--json`) shows dashboard-style output: `5h` and `weekly` bars, natural-language reset, and credits summary.
 - `limits --all`/`limits -a` shows a compact table with columns `profile`, `email`, `5h (reset)`, `weekly (reset)` and a `Current default profile` line.
 - `limits --json` keeps the raw JSON output from rate limits for scripting/automation.
+
+## Generate Codex Actions
+- `add switch action` reads logged profiles from `~/.codex-profiles` and writes per-profile switch actions into `.codex/environments/environment.toml`.
+- Platform support for now: `macos` (alias: `darwin`, written as `darwin` in the TOML file).
+- Example:
+- `codex-use add switch action --platform macos`
+- Preview only:
+- `codex-use add switch action --dry-run`

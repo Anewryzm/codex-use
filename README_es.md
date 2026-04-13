@@ -32,6 +32,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 ## Comandos disponibles
 - `codex-use login <profile>`
 - `codex-use use <profile> [--force] [--relaunch] [--from-action]`
+- `codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]`
 - `codex-use usage [--json]`
 - `codex-use limits [profile|default] [--all] [--json] [--refresh]`
 - `codex-use list`
@@ -74,3 +75,11 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `limits <profile>` (sin `--json`) usa salida legible tipo dashboard: barras de `5h` y `weekly`, renovación en lenguaje natural y resumen de créditos.
 - `limits --all`/`limits -a` usa tabla compacta con columnas `profile`, `email`, `5h (reset)`, `weekly (reset)` y línea `Current default profile`.
 - `limits --json` conserva salida JSON cruda de rate limits para scripting/automatización.
+
+## Generar Actions de Codex
+- `add switch action` lee perfiles logueados desde `~/.codex-profiles` y escribe acciones de cambio por perfil en `.codex/environments/environment.toml`.
+- Soporte de plataforma por ahora: `macos` (alias: `darwin`, se escribe como `darwin` en el TOML).
+- Ejemplo:
+- `codex-use add switch action --platform macos`
+- Solo vista previa:
+- `codex-use add switch action --dry-run`
