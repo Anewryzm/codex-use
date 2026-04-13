@@ -35,6 +35,11 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 - `codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]`
 - `codex-use delete switch action [--platform <macos|darwin>] [--dry-run]`
 - `codex-use usage [--json]`
+- `codex-use backup [--note "..."] [--dir <path>] [--delete]`
+- `codex-use backup init [--dir <path>]`
+- `codex-use backup add remote <url> [--name <remote>] [--dir <path>]`
+- `codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]`
+- `codex-use backup restore [--dir <path>] [--relaunch] [--delete]`
 - `codex-use limits [profile|default] [--all] [--json] [--refresh]`
 - `codex-use list`
 - `codex-use whoami`
@@ -49,6 +54,8 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 - `--relaunch` closes and reopens Codex App so the UI reads the new `auth.json`.
 - `--from-action` is intended for Codex Actions: after a successful `--relaunch`, it tries to auto-close the current Terminal tab.
 - `usage` reads local history from `~/.codex/sessions`.
+- `backup` snapshots `~/.codex/sessions` into a Git repo (default: `~/codex-history-backup`).
+- `backup` is copy-only by default (no deletions). Use `--delete` only when you intentionally want mirror mode.
 - `limits` queries `codex app-server` using JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
 
 ## Quick troubleshooting when "the account did not change" in the app

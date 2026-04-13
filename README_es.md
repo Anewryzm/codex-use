@@ -35,6 +35,11 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]`
 - `codex-use delete switch action [--platform <macos|darwin>] [--dry-run]`
 - `codex-use usage [--json]`
+- `codex-use backup [--note "..."] [--dir <path>] [--delete]`
+- `codex-use backup init [--dir <path>]`
+- `codex-use backup add remote <url> [--name <remote>] [--dir <path>]`
+- `codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]`
+- `codex-use backup restore [--dir <path>] [--relaunch] [--delete]`
 - `codex-use limits [profile|default] [--all] [--json] [--refresh]`
 - `codex-use list`
 - `codex-use whoami`
@@ -49,6 +54,8 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `--relaunch` cierra y vuelve a abrir Codex App para que la UI lea el nuevo `auth.json`.
 - `--from-action` está pensado para Codex Actions: tras un `--relaunch` exitoso, intenta cerrar automáticamente la pestaña actual de Terminal.
 - `usage` lee histórico local desde `~/.codex/sessions`.
+- `backup` crea snapshots de `~/.codex/sessions` en un repo Git (default: `~/codex-history-backup`).
+- `backup` por defecto solo copia (no borra). Usa `--delete` solo si quieres modo espejo.
 - `limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
 
 ## Diagnóstico rápido cuando "no cambia la cuenta" en la app

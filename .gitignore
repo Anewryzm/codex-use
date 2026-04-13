@@ -1,0 +1,5 @@
+# macOS metadata
+.DS_Store
+
+# Local Codex project state (generated per machine)
+.codex/

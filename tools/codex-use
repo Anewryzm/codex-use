@@ -5,6 +5,7 @@ DEFAULT_HOME="${CODEX_DEFAULT_HOME:-$HOME/.codex}"
 PROFILES_ROOT="${CODEX_PROFILES_HOME:-$HOME/.codex-profiles}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 BACKUP_DIR="$DEFAULT_HOME/backups"
+HISTORY_BACKUP_DIR_DEFAULT="${CODEX_HISTORY_BACKUP_DIR:-$HOME/codex-history-backup}"
 
 usage() {
   cat <<USAGE
@@ -16,6 +17,11 @@ Usage:
   codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]
   codex-use delete switch action [--platform <macos|darwin>] [--dry-run]
   codex-use usage [--json]
+  codex-use backup [--note "..."] [--dir <path>] [--delete]
+  codex-use backup init [--dir <path>]
+  codex-use backup add remote <url> [--name <remote>] [--dir <path>]
+  codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]
+  codex-use backup restore [--dir <path>] [--relaunch] [--delete]
   codex-use pricing show
   codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
   codex-use limits [profile|default] [--all] [--json] [--refresh]
@@ -36,6 +42,7 @@ Notes:
   - Profile homes are stored in:      $PROFILES_ROOT/<profile>
   - 'use' copies <profile>/auth.json into $DEFAULT_HOME/auth.json
   - 'usage' reads local session logs from: $HOME/.codex/sessions
+  - 'backup' mirrors $DEFAULT_HOME/sessions into a git repo (default: $HISTORY_BACKUP_DIR_DEFAULT)
   - 'limits' uses Codex app-server RPC (account/read + account/rateLimits/read)
   - 'pricing' stores overrides in:       $DEFAULT_HOME/pricing.json
   - 'add switch action' writes project actions to: <project>/.codex/environments/environment.toml
@@ -1566,6 +1573,581 @@ print_historical_usage_table() {
   echo "Note: out(M) includes reasoning output."
 }
 
+print_backup_help() {
+  cat <<HELP
+Usage:
+  codex-use backup [--note "..."] [--dir <path>] [--delete]
+  codex-use backup init [--dir <path>]
+  codex-use backup add remote <url> [--name <remote>] [--dir <path>]
+  codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]
+  codex-use backup restore [--dir <path>] [--relaunch] [--delete]
+
+Notes:
+  - Default backup repo dir: $HISTORY_BACKUP_DIR_DEFAULT
+  - 'backup' (run) copies sessions without deleting by default.
+  - Use --delete only when you want mirror mode.
+HELP
+}
+
+backup_default_repo_dir() {
+  echo "$HISTORY_BACKUP_DIR_DEFAULT"
+}
+
+ensure_backup_repo_initialized() {
+  local repo_dir="$1"
+  mkdir -p "$repo_dir"
+  if [ ! -d "$repo_dir/.git" ]; then
+    if ! git -C "$repo_dir" init -b main >/dev/null 2>&1; then
+      git -C "$repo_dir" init >/dev/null
+    fi
+  fi
+}
+
+ensure_backup_gitignore() {
+  local repo_dir="$1"
+  local gitignore_file="$repo_dir/.gitignore"
+  local marker="# codex-use backup safety rules"
+
+  if [ -f "$gitignore_file" ] && grep -Fq "$marker" "$gitignore_file"; then
+    return 0
+  fi
+
+  cat >> "$gitignore_file" <<'EOF'
+# codex-use backup safety rules
+# This backup repo should only track session history snapshots.
+auth.json
+config.toml
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+logs/
+log/
+tmp/
+cache/
+memories/
+shell_snapshots/
+backups/
+EOF
+}
+
+format_tokens_m() {
+  local tokens="${1:-0}"
+  node -e '
+const n = Number(process.argv[1] || 0);
+const m = Math.trunc((n / 1_000_000) * 10) / 10;
+process.stdout.write(`${m.toFixed(1)}M`);
+' "$tokens"
+}
+
+backup_sessions_summary_tsv() {
+  local sessions_root="$1"
+  node - "$sessions_root" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const sessionsRoot = process.argv[2];
+
+function walkJsonlFiles(dir, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walkJsonlFiles(p, out);
+    else if (e.isFile() && p.endsWith(".jsonl")) out.push(p);
+  }
+  return out;
+}
+
+function asNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+const files = walkJsonlFiles(sessionsRoot).sort();
+const selectedFilesBySession = new Map();
+for (const file of files) {
+  let content = "";
+  try {
+    content = fs.readFileSync(file, "utf8");
+  } catch {
+    continue;
+  }
+  if (!content) continue;
+  const lines = content.split("\n");
+  let sessionId = null;
+  let maxTotalInFile = 0;
+  for (const line of lines) {
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event.type === "session_meta" && !sessionId) {
+      sessionId = event?.payload?.id || sessionId;
+    }
+    if (event.type === "event_msg" && event?.payload?.type === "token_count") {
+      const t = event?.payload?.info?.total_token_usage;
+      if (!t || typeof t !== "object") continue;
+      maxTotalInFile = Math.max(maxTotalInFile, asNumber(t.total_tokens));
+    }
+  }
+  const key = sessionId || file;
+  const prev = selectedFilesBySession.get(key);
+  if (!prev || maxTotalInFile >= prev.maxTotalInFile) {
+    selectedFilesBySession.set(key, { file, maxTotalInFile });
+  }
+}
+
+const totals = {
+  input: 0,
+  cached: 0,
+  outputWithReasoning: 0,
+  total: 0,
+  sessions: 0,
+};
+const models = new Set();
+
+for (const { file } of selectedFilesBySession.values()) {
+  let content = "";
+  try {
+    content = fs.readFileSync(file, "utf8");
+  } catch {
+    continue;
+  }
+  if (!content) continue;
+  const lines = content.split("\n");
+  let currentModel = "unknown";
+  let seenAnySnapshot = false;
+  let prev = {
+    input: 0,
+    cached: 0,
+    output: 0,
+    reasoning: 0,
+    total: 0,
+  };
+  const seenModelsInSession = new Set();
+
+  for (const line of lines) {
+    if (!line) continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    if (event.type === "turn_context" && event?.payload?.model) {
+      currentModel = event.payload.model;
+      seenModelsInSession.add(currentModel);
+      continue;
+    }
+
+    if (event.type !== "event_msg" || event?.payload?.type !== "token_count") {
+      continue;
+    }
+    const t = event?.payload?.info?.total_token_usage;
+    if (!t || typeof t !== "object") continue;
+    seenAnySnapshot = true;
+
+    const cur = {
+      input: asNumber(t.input_tokens),
+      cached: asNumber(t.cached_input_tokens),
+      output: asNumber(t.output_tokens),
+      reasoning: asNumber(t.reasoning_output_tokens),
+      total: asNumber(t.total_tokens),
+    };
+    const delta = {
+      input: Math.max(0, cur.input - prev.input),
+      cached: Math.max(0, cur.cached - prev.cached),
+      output: Math.max(0, cur.output - prev.output),
+      reasoning: Math.max(0, cur.reasoning - prev.reasoning),
+      total: Math.max(0, cur.total - prev.total),
+    };
+
+    totals.input += delta.input;
+    totals.cached += delta.cached;
+    totals.outputWithReasoning += delta.output + delta.reasoning;
+    totals.total += delta.total;
+    prev = cur;
+  }
+
+  if (seenAnySnapshot) {
+    totals.sessions += 1;
+    if (seenModelsInSession.size === 0) seenModelsInSession.add("unknown");
+    for (const m of seenModelsInSession) models.add(m);
+  }
+}
+
+const out = [
+  String(totals.sessions),
+  String(totals.total),
+  String(totals.input),
+  String(totals.cached),
+  String(totals.outputWithReasoning),
+  Array.from(models).sort().join(","),
+];
+process.stdout.write(out.join("\t"));
+NODE
+}
+
+count_jsonl_files() {
+  local root="$1"
+  if [ ! -d "$root" ]; then
+    echo "0"
+    return 0
+  fi
+  find "$root" -type f -name '*.jsonl' | wc -l | tr -d ' '
+}
+
+cmd_backup_init() {
+  ensure_dirs
+  local repo_dir
+  repo_dir="$(backup_default_repo_dir)"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dir)
+        [ "$#" -ge 2 ] || die "Missing value for --dir"
+        repo_dir="$2"
+        shift 2
+        ;;
+      -h|--help)
+        print_backup_help
+        return 0
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codex-use backup init [--dir <path>]"
+        ;;
+    esac
+  done
+
+  ensure_backup_repo_initialized "$repo_dir"
+  ensure_backup_gitignore "$repo_dir"
+
+  echo "Backup repo ready: $repo_dir"
+  echo "Tip: run 'codex-use backup --dir \"$repo_dir\"' to create the first snapshot commit."
+}
+
+cmd_backup_run() {
+  ensure_dirs
+  local repo_dir note delete_mode
+  repo_dir="$(backup_default_repo_dir)"
+  note=""
+  delete_mode="false"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dir)
+        [ "$#" -ge 2 ] || die "Missing value for --dir"
+        repo_dir="$2"
+        shift 2
+        ;;
+      --note)
+        [ "$#" -ge 2 ] || die "Missing value for --note"
+        note="$2"
+        shift 2
+        ;;
+      --delete)
+        delete_mode="true"
+        shift
+        ;;
+      -h|--help)
+        print_backup_help
+        return 0
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codex-use backup [--note \"...\"] [--dir <path>] [--delete]"
+        ;;
+    esac
+  done
+
+  local source_sessions target_sessions
+  source_sessions="$DEFAULT_HOME/sessions"
+  target_sessions="$repo_dir/sessions"
+
+  [ -d "$source_sessions" ] || die "No sessions directory found at $source_sessions"
+
+  ensure_backup_repo_initialized "$repo_dir"
+  ensure_backup_gitignore "$repo_dir"
+
+  mkdir -p "$target_sessions"
+  local before_count after_count
+  before_count="$(count_jsonl_files "$target_sessions")"
+  if [ "$delete_mode" = "true" ]; then
+    rsync -a --delete "$source_sessions/" "$target_sessions/"
+  else
+    rsync -a "$source_sessions/" "$target_sessions/"
+  fi
+  after_count="$(count_jsonl_files "$target_sessions")"
+
+  local summary_tsv sessions_counted total_tokens total_input total_cached total_output_wr models_used
+  summary_tsv="$(backup_sessions_summary_tsv "$source_sessions")"
+  IFS=$'\t' read -r sessions_counted total_tokens total_input total_cached total_output_wr models_used <<<"$summary_tsv"
+  [ -n "$sessions_counted" ] || sessions_counted="0"
+  [ -n "$total_tokens" ] || total_tokens="0"
+  [ -n "$total_input" ] || total_input="0"
+  [ -n "$total_cached" ] || total_cached="0"
+  [ -n "$total_output_wr" ] || total_output_wr="0"
+  [ -n "$models_used" ] || models_used="none"
+
+  local tokens_human models_subject ts_human sync_mode commit_subject commit_body
+  tokens_human="$(format_tokens_m "$total_tokens")"
+  models_subject="$models_used"
+  if [ "${#models_subject}" -gt 58 ]; then
+    models_subject="${models_subject:0:55}..."
+  fi
+  ts_human="$(date -u +'%Y-%m-%d %H:%MZ')"
+  if [ "$delete_mode" = "true" ]; then
+    sync_mode="mirror (--delete)"
+  else
+    sync_mode="copy-only"
+  fi
+
+  commit_subject="backup: $ts_human | sessions=$sessions_counted | models=$models_subject | tokens=$tokens_human"
+  commit_body="Backup details
+source_sessions: $source_sessions
+backup_repo: $repo_dir
+sync_mode: $sync_mode
+jsonl_files_before: $before_count
+jsonl_files_after: $after_count
+
+Usage snapshot
+sessions_counted: $sessions_counted
+models_used: $models_used
+total_tokens: $total_tokens ($tokens_human)
+input_tokens: $total_input
+cached_tokens: $total_cached
+output_tokens_with_reasoning: $total_output_wr"
+  if [ -n "$note" ]; then
+    commit_body="$commit_body
+
+Note
+$note"
+  fi
+
+  git -C "$repo_dir" add .gitignore sessions
+  if git -C "$repo_dir" diff --cached --quiet; then
+    echo "Backup synced ($sync_mode), but no file changes were detected. No commit created."
+    return 0
+  fi
+
+  if ! git -C "$repo_dir" commit -m "$commit_subject" -m "$commit_body" >/dev/null; then
+    die "Git commit failed in $repo_dir. Check git user.name/user.email configuration."
+  fi
+
+  echo "Backup commit created in $repo_dir"
+  echo "Subject: $commit_subject"
+}
+
+cmd_backup_add_remote() {
+  ensure_dirs
+  local url="${1:-}"
+  shift || true
+  [ -n "$url" ] || die "Usage: codex-use backup add remote <url> [--name <remote>] [--dir <path>]"
+
+  local repo_dir remote_name
+  repo_dir="$(backup_default_repo_dir)"
+  remote_name="origin"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name)
+        [ "$#" -ge 2 ] || die "Missing value for --name"
+        remote_name="$2"
+        shift 2
+        ;;
+      --dir)
+        [ "$#" -ge 2 ] || die "Missing value for --dir"
+        repo_dir="$2"
+        shift 2
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codex-use backup add remote <url> [--name <remote>] [--dir <path>]"
+        ;;
+    esac
+  done
+
+  ensure_backup_repo_initialized "$repo_dir"
+  ensure_backup_gitignore "$repo_dir"
+
+  if git -C "$repo_dir" remote get-url "$remote_name" >/dev/null 2>&1; then
+    git -C "$repo_dir" remote set-url "$remote_name" "$url"
+    echo "Updated remote '$remote_name' -> $url"
+  else
+    git -C "$repo_dir" remote add "$remote_name" "$url"
+    echo "Added remote '$remote_name' -> $url"
+  fi
+}
+
+cmd_backup_push() {
+  ensure_dirs
+  local repo_dir remote_name branch
+  repo_dir="$(backup_default_repo_dir)"
+  remote_name="origin"
+  branch=""
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dir)
+        [ "$#" -ge 2 ] || die "Missing value for --dir"
+        repo_dir="$2"
+        shift 2
+        ;;
+      --remote)
+        [ "$#" -ge 2 ] || die "Missing value for --remote"
+        remote_name="$2"
+        shift 2
+        ;;
+      --branch)
+        [ "$#" -ge 2 ] || die "Missing value for --branch"
+        branch="$2"
+        shift 2
+        ;;
+      -h|--help)
+        print_backup_help
+        return 0
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]"
+        ;;
+    esac
+  done
+
+  [ -d "$repo_dir/.git" ] || die "No git repo found at $repo_dir. Run: codex-use backup init [--dir <path>]"
+  git -C "$repo_dir" rev-parse --verify HEAD >/dev/null 2>&1 || die "No commits found in $repo_dir. Run: codex-use backup first."
+  git -C "$repo_dir" remote get-url "$remote_name" >/dev/null 2>&1 || die "Remote '$remote_name' is not configured in $repo_dir."
+
+  local current_branch
+  current_branch="$(git -C "$repo_dir" branch --show-current 2>/dev/null || true)"
+  if [ -z "$branch" ]; then
+    branch="$current_branch"
+  fi
+  [ -n "$branch" ] || branch="main"
+
+  if [ -n "$current_branch" ] && [ "$current_branch" != "$branch" ]; then
+    if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch"; then
+      git -C "$repo_dir" checkout "$branch" >/dev/null
+    else
+      git -C "$repo_dir" checkout -b "$branch" >/dev/null
+    fi
+  fi
+
+  git -C "$repo_dir" push -u "$remote_name" "$branch"
+}
+
+cmd_backup_restore() {
+  ensure_dirs
+  local repo_dir relaunch delete_mode force_mode
+  repo_dir="$(backup_default_repo_dir)"
+  relaunch="false"
+  delete_mode="false"
+  force_mode="false"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dir)
+        [ "$#" -ge 2 ] || die "Missing value for --dir"
+        repo_dir="$2"
+        shift 2
+        ;;
+      --relaunch)
+        relaunch="true"
+        shift
+        ;;
+      --delete)
+        delete_mode="true"
+        shift
+        ;;
+      --force)
+        force_mode="true"
+        shift
+        ;;
+      -h|--help)
+        print_backup_help
+        return 0
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codex-use backup restore [--dir <path>] [--relaunch] [--delete]"
+        ;;
+    esac
+  done
+
+  local source_sessions target_sessions
+  source_sessions="$repo_dir/sessions"
+  target_sessions="$DEFAULT_HOME/sessions"
+
+  [ -d "$source_sessions" ] || die "No backup sessions found at $source_sessions"
+
+  if is_codex_app_running; then
+    if [ "$relaunch" = "true" ]; then
+      echo "Codex App is running. Closing it before restore..."
+      if ! close_codex_app_for_relaunch; then
+        die "Could not close Codex App cleanly after retries."
+      fi
+    elif [ "$force_mode" != "true" ]; then
+      die "Codex App is running. Close it first, or pass --relaunch (recommended) or --force."
+    fi
+  fi
+
+  mkdir -p "$target_sessions"
+  if [ "$delete_mode" = "true" ]; then
+    rsync -a --delete "$source_sessions/" "$target_sessions/"
+  else
+    rsync -a "$source_sessions/" "$target_sessions/"
+  fi
+
+  if [ "$relaunch" = "true" ]; then
+    if open_codex_app; then
+      echo "Codex App relaunched after restore."
+    else
+      echo "Restore finished, but Codex App could not be opened automatically."
+    fi
+  fi
+
+  echo "Restore completed from '$source_sessions' to '$target_sessions'."
+}
+
+cmd_backup() {
+  local sub="${1:-run}"
+  shift || true
+
+  if [[ "$sub" == --* ]]; then
+    set -- "$sub" "$@"
+    sub="run"
+  fi
+
+  case "$sub" in
+    run)
+      cmd_backup_run "$@"
+      ;;
+    init)
+      cmd_backup_init "$@"
+      ;;
+    add)
+      local target="${1:-}"
+      shift || true
+      if [ "$target" != "remote" ]; then
+        die "Usage: codex-use backup add remote <url> [--name <remote>] [--dir <path>]"
+      fi
+      cmd_backup_add_remote "$@"
+      ;;
+    push)
+      cmd_backup_push "$@"
+      ;;
+    restore)
+      cmd_backup_restore "$@"
+      ;;
+    help|-h|--help)
+      print_backup_help
+      ;;
+    *)
+      die "Unknown backup subcommand '$sub'. Run: codex-use backup --help"
+      ;;
+  esac
+}
+
 cmd_pricing() {
   ensure_dirs
   local sub="${1:-show}"
@@ -2335,6 +2917,7 @@ main() {
     use) cmd_use "$@" ;;
     usage) cmd_usage usage "$@" ;;
     limits) cmd_usage limits "$@" ;;
+    backup) cmd_backup "$@" ;;
     pricing) cmd_pricing "$@" ;;
     list) cmd_list ;;
     whoami) cmd_whoami ;;
