@@ -33,6 +33,7 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 - `codex-use login <profile>`
 - `codex-use use <profile> [--force] [--relaunch] [--from-action]`
 - `codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]`
+- `codex-use delete switch action [--platform <macos|darwin>] [--dry-run]`
 - `codex-use usage [--json]`
 - `codex-use limits [profile|default] [--all] [--json] [--refresh]`
 - `codex-use list`
@@ -83,3 +84,5 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 - `codex-use add switch action --platform macos`
 - Preview only:
 - `codex-use add switch action --dry-run`
+- Delete generated switch actions for macOS:
+- `codex-use delete switch action --platform macos`

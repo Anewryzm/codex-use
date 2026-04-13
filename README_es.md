@@ -33,6 +33,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `codex-use login <profile>`
 - `codex-use use <profile> [--force] [--relaunch] [--from-action]`
 - `codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]`
+- `codex-use delete switch action [--platform <macos|darwin>] [--dry-run]`
 - `codex-use usage [--json]`
 - `codex-use limits [profile|default] [--all] [--json] [--refresh]`
 - `codex-use list`
@@ -83,3 +84,5 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `codex-use add switch action --platform macos`
 - Solo vista previa:
 - `codex-use add switch action --dry-run`
+- Eliminar acciones de switch generadas para macOS:
+- `codex-use delete switch action --platform macos`

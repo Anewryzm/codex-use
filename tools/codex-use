@@ -14,6 +14,7 @@ Usage:
   codex-use login <profile> [--device-auth|extra codex login flags]
   codex-use use <profile> [--force] [--relaunch] [--from-action]
   codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]
+  codex-use delete switch action [--platform <macos|darwin>] [--dry-run]
   codex-use usage [--json]
   codex-use pricing show
   codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
@@ -826,6 +827,94 @@ if (finalBlocks.length > 0) {
 }
 
 process.stdout.write(out);
+NODE
+}
+
+render_environment_without_switch_actions() {
+  local env_file="$1"
+  local platform="$2"
+
+  node - "$env_file" "$platform" <<'NODE'
+const fs = require("fs");
+
+const envFile = process.argv[2];
+const platform = process.argv[3] || "darwin";
+
+let existing = "";
+try {
+  existing = fs.readFileSync(envFile, "utf8");
+} catch {
+  process.stdout.write("");
+  process.exit(0);
+}
+
+const actionStarts = [];
+{
+  const lines = existing.split(/\r?\n/);
+  let offset = 0;
+  for (const line of lines) {
+    if (line.trim() === "[[actions]]") {
+      actionStarts.push(offset);
+    }
+    offset += line.length + 1;
+  }
+}
+
+let prefix = existing;
+let blocks = [];
+if (actionStarts.length > 0) {
+  prefix = existing.slice(0, actionStarts[0]);
+  for (let i = 0; i < actionStarts.length; i++) {
+    const start = actionStarts[i];
+    const end = i + 1 < actionStarts.length ? actionStarts[i + 1] : existing.length;
+    blocks.push(existing.slice(start, end).trim());
+  }
+}
+
+const keepBlocks = blocks.filter((block) => {
+  const nameMatch = block.match(/^name\s*=\s*"([^"]*)"/m);
+  const platformMatch = block.match(/^platform\s*=\s*"([^"]*)"/m);
+  if (!nameMatch || !platformMatch) return true;
+  const name = nameMatch[1];
+  const p = platformMatch[1];
+  if (p === platform && /^switch\s+/.test(name)) return false;
+  return true;
+});
+
+let out = prefix.trimEnd() + "\n";
+if (keepBlocks.length > 0) {
+  out += "\n" + keepBlocks.join("\n\n") + "\n";
+}
+process.stdout.write(out);
+NODE
+}
+
+count_switch_actions_for_platform() {
+  local env_file="$1"
+  local platform="$2"
+  node - "$env_file" "$platform" <<'NODE'
+const fs = require("fs");
+const envFile = process.argv[2];
+const platform = process.argv[3] || "darwin";
+let text = "";
+try {
+  text = fs.readFileSync(envFile, "utf8");
+} catch {
+  process.stdout.write("0");
+  process.exit(0);
+}
+const blocks = text.split(/^\s*\[\[actions\]\]\s*$/m).slice(1);
+let count = 0;
+for (const tail of blocks) {
+  const block = "[[actions]]\n" + tail;
+  const nameMatch = block.match(/^name\s*=\s*"([^"]*)"/m);
+  const platformMatch = block.match(/^platform\s*=\s*"([^"]*)"/m);
+  if (!nameMatch || !platformMatch) continue;
+  if (platformMatch[1] === platform && /^switch\s+/.test(nameMatch[1])) {
+    count += 1;
+  }
+}
+process.stdout.write(String(count));
 NODE
 }
 
@@ -2170,6 +2259,74 @@ cmd_add() {
   done
 }
 
+cmd_delete() {
+  local subject="${1:-}"
+  local target="${2:-}"
+  shift 2 || true
+
+  if [ "$subject" != "switch" ] || [ "$target" != "action" ]; then
+    die "Usage: codex-use delete switch action [--platform <macos|darwin>] [--project-dir <dir>] [--dry-run]"
+  fi
+
+  local platform_input="macos"
+  local dry_run="false"
+  local project_dir="$PWD"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --platform)
+        [ "$#" -ge 2 ] || die "Missing value for --platform"
+        platform_input="$2"
+        shift 2
+        ;;
+      --project-dir)
+        [ "$#" -ge 2 ] || die "Missing value for --project-dir"
+        project_dir="$2"
+        shift 2
+        ;;
+      --dry-run)
+        dry_run="true"
+        shift
+        ;;
+      -h|--help)
+        echo "Usage: codex-use delete switch action [--platform <macos|darwin>] [--project-dir <dir>] [--dry-run]"
+        return 0
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codex-use delete switch action [--platform <macos|darwin>] [--dry-run]"
+        ;;
+    esac
+  done
+
+  local platform
+  platform="$(normalize_actions_platform "$platform_input")"
+
+  project_dir="$(cd "$project_dir" && pwd)"
+  local env_file new_content before_count after_count removed
+  env_file="$project_dir/.codex/environments/environment.toml"
+
+  [ -f "$env_file" ] || die "No actions file found at $env_file"
+
+  before_count="$(count_switch_actions_for_platform "$env_file" "$platform")"
+  new_content="$(render_environment_without_switch_actions "$env_file" "$platform")"
+  after_count="$(count_switch_actions_for_platform <(printf '%s' "$new_content") "$platform")"
+  removed=$((before_count - after_count))
+  [ "$removed" -ge 0 ] || removed=0
+
+  if [ "$dry_run" = "true" ]; then
+    diff -u "$env_file" <(printf '%s' "$new_content") || true
+    echo
+    echo "Dry run only. No files were written."
+    echo "Switch actions removed for platform '$platform': $removed"
+    return 0
+  fi
+
+  printf '%s' "$new_content" > "$env_file"
+  echo "Updated actions file: $env_file"
+  echo "Platform: $platform"
+  echo "Switch actions removed: $removed"
+}
+
 main() {
   local cmd="${1:-help}"
   shift || true
@@ -2185,6 +2342,7 @@ main() {
     logout) cmd_logout "$@" ;;
     logout-default) cmd_logout_default ;;
     add) cmd_add "$@" ;;
+    delete) cmd_delete "$@" ;;
     help|-h|--help) usage ;;
     *) die "Unknown command '$cmd'. Run: codex-use help" ;;
   esac
