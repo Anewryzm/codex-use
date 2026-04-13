@@ -36,6 +36,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `codex-use delete switch action [--platform <macos|darwin>] [--dry-run]`
 - `codex-use usage [--json]`
 - `codex-use backup [--note "..."] [--dir <path>] [--delete]`
+- `codex-use backup status [--dir <path>]`
 - `codex-use backup init [--dir <path>]`
 - `codex-use backup add remote <url> [--name <remote>] [--dir <path>]`
 - `codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]`
@@ -83,6 +84,15 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `limits <profile>` (sin `--json`) usa salida legible tipo dashboard: barras de `5h` y `weekly`, renovación en lenguaje natural y resumen de créditos.
 - `limits --all`/`limits -a` usa tabla compacta con columnas `profile`, `email`, `5h (reset)`, `weekly (reset)` y línea `Current default profile`.
 - `limits --json` conserva salida JSON cruda de rate limits para scripting/automatización.
+
+## Salida de `backup status`
+- `backup status` muestra salud del respaldo con formato orientado a terminal (`key: value`): estado del repo/git, conteo de archivos origen vs backup, cobertura por `session_id` y deltas pendientes de copia/borrado.
+- `pending_copy_files` indica lo que se copiaría en modo default.
+- `pending_mirror_deletes` indica lo que se borraría solo en modo espejo con `--delete`.
+
+## Notas del commit de `backup`
+- Los commits de `backup` ahora incluyen una sección `Session notes` con solo rollouts nuevos/modificados desde el commit anterior (no lista acumulativa infinita).
+- Cada línea incluye archivo de rollout, título resuelto (si existe), modelo, snapshot de tokens totales y timestamp más reciente.
 
 ## Generar Actions de Codex
 - `add switch action` lee perfiles logueados desde `~/.codex-profiles` y escribe acciones de cambio por perfil en `.codex/environments/environment.toml`.

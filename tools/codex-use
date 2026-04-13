@@ -18,6 +18,7 @@ Usage:
   codex-use delete switch action [--platform <macos|darwin>] [--dry-run]
   codex-use usage [--json]
   codex-use backup [--note "..."] [--dir <path>] [--delete]
+  codex-use backup status [--dir <path>]
   codex-use backup init [--dir <path>]
   codex-use backup add remote <url> [--name <remote>] [--dir <path>]
   codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]
@@ -1577,6 +1578,7 @@ print_backup_help() {
   cat <<HELP
 Usage:
   codex-use backup [--note "..."] [--dir <path>] [--delete]
+  codex-use backup status [--dir <path>]
   codex-use backup init [--dir <path>]
   codex-use backup add remote <url> [--name <remote>] [--dir <path>]
   codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]
@@ -1801,6 +1803,287 @@ count_jsonl_files() {
   find "$root" -type f -name '*.jsonl' | wc -l | tr -d ' '
 }
 
+backup_session_id_coverage_tsv() {
+  local source_root="$1"
+  local backup_root="$2"
+  node - "$source_root" "$backup_root" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const sourceRoot = process.argv[2];
+const backupRoot = process.argv[3];
+
+function walkJsonlFiles(dir, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walkJsonlFiles(p, out);
+    else if (e.isFile() && p.endsWith(".jsonl")) out.push(p);
+  }
+  return out;
+}
+
+function scanIds(root) {
+  const ids = new Set();
+  const files = walkJsonlFiles(root);
+  for (const f of files) {
+    let text = "";
+    try {
+      text = fs.readFileSync(f, "utf8");
+    } catch {
+      continue;
+    }
+    const lines = text.split("\n");
+    for (const line of lines) {
+      if (!line) continue;
+      let evt;
+      try {
+        evt = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (evt?.type === "session_meta" && evt?.payload?.id) {
+        ids.add(String(evt.payload.id));
+        break;
+      }
+    }
+  }
+  return ids;
+}
+
+const sourceIds = scanIds(sourceRoot);
+const backupIds = scanIds(backupRoot);
+let shared = 0;
+for (const id of sourceIds) {
+  if (backupIds.has(id)) shared += 1;
+}
+
+process.stdout.write([
+  String(sourceIds.size),
+  String(backupIds.size),
+  String(shared),
+].join("\t"));
+NODE
+}
+
+backup_pending_copy_count() {
+  local source_root="$1"
+  local backup_root="$2"
+  mkdir -p "$backup_root"
+  rsync -ani --out-format='%n' "$source_root/" "$backup_root/" \
+    | awk '/\.jsonl$/ { c++ } END { print c+0 }'
+}
+
+backup_pending_delete_count() {
+  local source_root="$1"
+  local backup_root="$2"
+  if [ ! -d "$backup_root" ]; then
+    echo "0"
+    return 0
+  fi
+  rsync -ani --delete "$source_root/" "$backup_root/" \
+    | awk '/^\*deleting .*\.jsonl$/ { c++ } END { print c+0 }'
+}
+
+backup_session_notes_tsv() {
+  local repo_dir="$1"
+  local state_db="$DEFAULT_HOME/state_5.sqlite"
+  local diff_file
+  diff_file="$(mktemp)"
+  git -C "$repo_dir" diff --cached --name-status -- sessions > "$diff_file"
+  node - "$repo_dir" "$state_db" "$diff_file" <<'NODE'
+const fs = require("fs");
+const path = require("path");
+const { execSync } = require("child_process");
+
+const repoDir = process.argv[2];
+const stateDb = process.argv[3];
+const diffPath = process.argv[4];
+const input = fs.readFileSync(diffPath, "utf8");
+const lines = input.split(/\r?\n/).filter(Boolean);
+
+const changed = [];
+for (const line of lines) {
+  const parts = line.split(/\t+/);
+  const status = parts[0] || "";
+  const relPath = parts[1] || "";
+  if (!/^[AM]$/.test(status)) continue;
+  if (!relPath.endsWith(".jsonl")) continue;
+  changed.push({ status, relPath });
+}
+
+const titles = new Map();
+if (fs.existsSync(stateDb)) {
+  try {
+    const raw = execSync(
+      `sqlite3 -tabs "${stateDb}" "select id || char(9) || title from threads;"`,
+      { encoding: "utf8" },
+    ).trim();
+    if (raw) {
+      for (const row of raw.split(/\r?\n/)) {
+        const tab = row.indexOf("\t");
+        if (tab <= 0) continue;
+        const id = row.slice(0, tab);
+        const title = row.slice(tab + 1);
+        titles.set(id, title || "");
+      }
+    }
+  } catch {
+    // ignore sqlite read issues
+  }
+}
+
+function asNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+for (const item of changed) {
+  const abs = path.join(repoDir, item.relPath);
+  let text = "";
+  try {
+    text = fs.readFileSync(abs, "utf8");
+  } catch {
+    continue;
+  }
+  if (!text) continue;
+
+  const parsed = [];
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    try {
+      parsed.push(JSON.parse(line));
+    } catch {
+      // skip invalid line
+    }
+  }
+
+  let sessionId = "";
+  let model = "unknown";
+  let latestTs = "";
+  let maxTotal = 0;
+
+  for (const evt of parsed) {
+    if (!latestTs && evt?.timestamp) latestTs = String(evt.timestamp);
+    if (evt?.timestamp && String(evt.timestamp) > latestTs) latestTs = String(evt.timestamp);
+    if (!sessionId && evt?.type === "session_meta" && evt?.payload?.id) {
+      sessionId = String(evt.payload.id);
+    }
+    if (evt?.type === "turn_context" && evt?.payload?.model) {
+      model = String(evt.payload.model);
+    }
+    if (evt?.type === "event_msg" && evt?.payload?.type === "token_count") {
+      const t = evt?.payload?.info?.total_token_usage;
+      if (t && typeof t === "object") {
+        maxTotal = Math.max(maxTotal, asNumber(t.total_tokens));
+      }
+    }
+  }
+
+  const shortId = sessionId ? sessionId.slice(0, 8) : "unknown";
+  const fallbackTitle = `[untitled:${shortId}]`;
+  const title = sessionId ? (titles.get(sessionId) || fallbackTitle) : fallbackTitle;
+  const rolloutName = path.basename(item.relPath);
+
+  process.stdout.write([
+    item.status,
+    rolloutName,
+    sessionId || "unknown",
+    title.replace(/\s+/g, " ").trim(),
+    model,
+    String(maxTotal),
+    latestTs || "-",
+  ].join("\t") + "\n");
+}
+NODE
+  rm -f "$diff_file"
+}
+
+cmd_backup_status() {
+  ensure_dirs
+  local repo_dir
+  repo_dir="$(backup_default_repo_dir)"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dir)
+        [ "$#" -ge 2 ] || die "Missing value for --dir"
+        repo_dir="$2"
+        shift 2
+        ;;
+      -h|--help)
+        print_backup_help
+        return 0
+        ;;
+      *)
+        die "Unknown option '$1'. Usage: codex-use backup status [--dir <path>]"
+        ;;
+    esac
+  done
+
+  local source_sessions backup_sessions
+  source_sessions="$DEFAULT_HOME/sessions"
+  backup_sessions="$repo_dir/sessions"
+
+  local source_files backup_files
+  source_files="$(count_jsonl_files "$source_sessions")"
+  backup_files="$(count_jsonl_files "$backup_sessions")"
+
+  local source_ids backup_ids shared_ids coverage_pct
+  source_ids="0"
+  backup_ids="0"
+  shared_ids="0"
+  coverage_pct="0"
+  if [ -d "$source_sessions" ]; then
+    local coverage_tsv
+    coverage_tsv="$(backup_session_id_coverage_tsv "$source_sessions" "$backup_sessions")"
+    IFS=$'\t' read -r source_ids backup_ids shared_ids <<<"$coverage_tsv"
+    source_ids="${source_ids:-0}"
+    backup_ids="${backup_ids:-0}"
+    shared_ids="${shared_ids:-0}"
+    if [ "$source_ids" -gt 0 ] 2>/dev/null; then
+      coverage_pct="$((shared_ids * 100 / source_ids))"
+    fi
+  fi
+
+  local pending_copy pending_delete
+  pending_copy="0"
+  pending_delete="0"
+  if [ -d "$source_sessions" ]; then
+    pending_copy="$(backup_pending_copy_count "$source_sessions" "$backup_sessions")"
+    pending_delete="$(backup_pending_delete_count "$source_sessions" "$backup_sessions")"
+  fi
+
+  local git_initialized branch remote_url last_commit
+  git_initialized="no"
+  branch="-"
+  remote_url="-"
+  last_commit="-"
+  if [ -d "$repo_dir/.git" ]; then
+    git_initialized="yes"
+    branch="$(git -C "$repo_dir" branch --show-current 2>/dev/null || echo "-")"
+    remote_url="$(git -C "$repo_dir" remote get-url origin 2>/dev/null || echo "-")"
+    last_commit="$(git -C "$repo_dir" log -1 --format='%h %ci %s' 2>/dev/null || echo "-")"
+  fi
+
+  echo "--- backup status ---"
+  echo "repo: $repo_dir"
+  echo "git_initialized: $git_initialized"
+  echo "branch: ${branch:-"-"}"
+  echo "remote(origin): $remote_url"
+  echo "last_commit: $last_commit"
+  echo
+  echo "sessions_source_files: $source_files"
+  echo "sessions_backup_files: $backup_files"
+  echo "session_ids_source: $source_ids"
+  echo "session_ids_backup: $backup_ids"
+  echo "session_id_coverage: ${coverage_pct}% ($shared_ids/$source_ids)"
+  echo
+  echo "pending_copy_files (default mode): $pending_copy"
+  echo "pending_mirror_deletes (--delete mode): $pending_delete"
+}
+
 cmd_backup_init() {
   ensure_dirs
   local repo_dir
@@ -1931,6 +2214,29 @@ $note"
   if git -C "$repo_dir" diff --cached --quiet; then
     echo "Backup synced ($sync_mode), but no file changes were detected. No commit created."
     return 0
+  fi
+
+  local session_notes_tsv session_notes_section notes_count
+  session_notes_tsv="$(backup_session_notes_tsv "$repo_dir" || true)"
+  session_notes_section=""
+  notes_count=0
+  if [ -n "$session_notes_tsv" ]; then
+    session_notes_section="Session notes (new/changed rollouts since last backup)"
+    while IFS=$'\t' read -r change rollout_name sid title model total_tokens latest_ts; do
+      [ -n "$rollout_name" ] || continue
+      notes_count=$((notes_count + 1))
+      if [ "$notes_count" -gt 20 ]; then
+        break
+      fi
+      session_notes_section="$session_notes_section
+- [$change] $rollout_name | $title | model=$model | total_tokens=$total_tokens | latest_ts=$latest_ts"
+    done <<< "$session_notes_tsv"
+  fi
+
+  if [ -n "$session_notes_section" ]; then
+    commit_body="$commit_body
+
+$session_notes_section"
   fi
 
   if ! git -C "$repo_dir" commit -m "$commit_subject" -m "$commit_body" >/dev/null; then
@@ -2121,6 +2427,9 @@ cmd_backup() {
   case "$sub" in
     run)
       cmd_backup_run "$@"
+      ;;
+    status)
+      cmd_backup_status "$@"
       ;;
     init)
       cmd_backup_init "$@"

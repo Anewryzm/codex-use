@@ -36,6 +36,7 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 - `codex-use delete switch action [--platform <macos|darwin>] [--dry-run]`
 - `codex-use usage [--json]`
 - `codex-use backup [--note "..."] [--dir <path>] [--delete]`
+- `codex-use backup status [--dir <path>]`
 - `codex-use backup init [--dir <path>]`
 - `codex-use backup add remote <url> [--name <remote>] [--dir <path>]`
 - `codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]`
@@ -83,6 +84,15 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 - `limits <profile>` (without `--json`) shows dashboard-style output: `5h` and `weekly` bars, natural-language reset, and credits summary.
 - `limits --all`/`limits -a` shows a compact table with columns `profile`, `email`, `5h (reset)`, `weekly (reset)` and a `Current default profile` line.
 - `limits --json` keeps the raw JSON output from rate limits for scripting/automation.
+
+## `backup status` output
+- `backup status` shows backup health in terminal-first format (`key: value`), including repo/git state, source vs backup file counts, session-id coverage, and pending copy/delete deltas.
+- `pending_copy_files` indicates what would be copied in default mode.
+- `pending_mirror_deletes` indicates what would be removed only in `--delete` mirror mode.
+
+## `backup` commit notes
+- `backup` commits now include a `Session notes` section with only new/changed rollouts since the previous backup commit (not a cumulative list).
+- Each note line includes rollout file, resolved title (when available), model, token total snapshot, and latest timestamp.
 
 ## Generate Codex Actions
 - `add switch action` reads logged profiles from `~/.codex-profiles` and writes per-profile switch actions into `.codex/environments/environment.toml`.
