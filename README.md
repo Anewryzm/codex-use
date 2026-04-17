@@ -84,6 +84,13 @@ CLI to manage multiple Codex accounts by profile and promote one account to the 
 - `limits <profile>` (without `--json`) shows dashboard-style output: `5h` and `weekly` bars, natural-language reset, and credits summary.
 - `limits --all`/`limits -a` shows a compact table with columns `profile`, `email`, `5h (reset)`, `weekly (reset)` and a `Current default profile` line.
 - `limits --json` keeps the raw JSON output from rate limits for scripting/automation.
+- If live RPC fails but a previous snapshot exists, `limits` now falls back to local cache (`<profile>/cache/codex-use-rate-limits.json`).
+- In `limits --all`, cached rows are marked with `~` and `(cached)` in the email column.
+- In `status <profile>`, cached fallback is explicitly shown as `note: showing cached limits snapshot (...)`.
+- Freshness states in `limits --all`:
+- `✓` means live RPC responded and values are fresh.
+- `~` means live RPC failed, but cached snapshot is being used.
+- `network-error`/`rpc-error` means live RPC failed and there is no usable cache snapshot.
 
 ## `backup status` output
 - `backup status` shows backup health in terminal-first format (`key: value`), including repo/git state, source vs backup file counts, session-id coverage, and pending copy/delete deltas.

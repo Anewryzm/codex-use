@@ -697,6 +697,116 @@ function resetText(epochSeconds) {
 NODE
 }
 
+limits_cache_file() {
+  local target_home="$1"
+  echo "$target_home/cache/codex-use-rate-limits.json"
+}
+
+write_limits_cache() {
+  local target_home="$1"
+  local payload_json="$2"
+  local cache_file cache_dir
+  cache_file="$(limits_cache_file "$target_home")"
+  cache_dir="$(dirname "$cache_file")"
+
+  mkdir -p "$cache_dir" || return 0
+
+  if ! printf "%s" "$payload_json" | node -e '
+const fs = require("fs");
+const cachePath = process.argv[1];
+const raw = fs.readFileSync(0, "utf8");
+let data;
+try {
+  data = JSON.parse(raw);
+} catch {
+  process.exit(1);
+}
+const meta = (data && typeof data === "object" && data._codexUseCache && typeof data._codexUseCache === "object")
+  ? data._codexUseCache
+  : {};
+data._codexUseCache = {
+  ...meta,
+  source: "rpc",
+  fetchedAt: Math.floor(Date.now() / 1000),
+  stale: false,
+};
+fs.writeFileSync(cachePath, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
+' "$cache_file"
+  then
+    return 0
+  fi
+
+  chmod 600 "$cache_file" >/dev/null 2>&1 || true
+  return 0
+}
+
+decorate_cached_limits_json() {
+  node -e '
+const fs = require("fs");
+const raw = fs.readFileSync(0, "utf8");
+let data;
+try {
+  data = JSON.parse(raw);
+} catch {
+  process.exit(1);
+}
+const meta = (data && typeof data === "object" && data._codexUseCache && typeof data._codexUseCache === "object")
+  ? data._codexUseCache
+  : {};
+data._codexUseCache = {
+  ...meta,
+  source: meta.source || "cache",
+  stale: true,
+  fallbackAt: Math.floor(Date.now() / 1000),
+};
+process.stdout.write(JSON.stringify(data, null, 2));
+'
+}
+
+read_limits_cache_decorated() {
+  local target_home="$1"
+  local cache_file
+  cache_file="$(limits_cache_file "$target_home")"
+  [ -f "$cache_file" ] || return 1
+
+  local raw
+  raw="$(cat "$cache_file" 2>/dev/null || true)"
+  [ -n "$raw" ] || return 1
+
+  if ! printf "%s" "$raw" | decorate_cached_limits_json; then
+    return 1
+  fi
+}
+
+fetch_usage_with_cache() {
+  local target_home="$1"
+  local _json_mode="${2:-true}"
+  local refresh_mode="${3:-false}"
+
+  local rpc_json err_file rpc_err
+  err_file="$(mktemp)"
+  if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+    rm -f "$err_file"
+    write_limits_cache "$target_home" "$rpc_json" || true
+    printf "%s" "$rpc_json"
+    return 0
+  fi
+
+  local cached_json
+  rpc_err="$(cat "$err_file" 2>/dev/null || true)"
+  rm -f "$err_file"
+  if cached_json="$(read_limits_cache_decorated "$target_home")"; then
+    local cache_file
+    cache_file="$(limits_cache_file "$target_home")"
+    echo "RPC usage probe failed; using cached limits snapshot from $cache_file" >&2
+    printf "%s" "$cached_json"
+    return 10
+  fi
+
+  [ -z "$rpc_err" ] || printf "%s" "$rpc_err" >&2
+  return 1
+}
+
 collect_usage_targets() {
   echo "default|$DEFAULT_HOME"
   for d in "$PROFILES_ROOT"/*; do
@@ -972,6 +1082,40 @@ process.stdout.write(row.join("\t"));
 '
 }
 
+json_cache_info_to_tsv() {
+  node -e '
+const fs = require("fs");
+const raw = fs.readFileSync(0, "utf8");
+const data = JSON.parse(raw);
+const meta = (data && typeof data === "object" && data._codexUseCache && typeof data._codexUseCache === "object")
+  ? data._codexUseCache
+  : {};
+const stale = meta.stale === true ? "true" : "false";
+const fetchedAt = Number(meta.fetchedAt);
+
+function relativeAge(epochSeconds) {
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return "unknown";
+  const nowMs = Date.now();
+  const targetMs = epochSeconds * 1000;
+  const deltaMs = nowMs - targetMs;
+  const absMs = Math.abs(deltaMs);
+  const mins = Math.floor(absMs / 60000);
+  const days = Math.floor(mins / (60 * 24));
+  const hours = Math.floor((mins % (60 * 24)) / 60);
+  const minutes = mins % 60;
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+  const relative = parts.slice(0, 2).join(" ");
+  return deltaMs >= 0 ? `${relative} ago` : `in ${relative}`;
+}
+
+const row = [stale, relativeAge(fetchedAt)];
+process.stdout.write(row.join("\t"));
+'
+}
+
 json_usage_details_to_tsv() {
   node -e '
 const fs = require("fs");
@@ -1038,9 +1182,15 @@ print_usage_details_for_home() {
   local target_home="$1"
   local refresh_mode="${2:-false}"
 
-  local rpc_json err_file
+  local rpc_json err_file fetch_status
   err_file="$(mktemp)"
-  if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+  if rpc_json="$(fetch_usage_with_cache "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+    fetch_status=0
+  else
+    fetch_status=$?
+  fi
+
+  if [ "$fetch_status" -eq 0 ] || [ "$fetch_status" -eq 10 ]; then
     local tsv
     if tsv="$(printf "%s" "$rpc_json" | json_usage_details_to_tsv 2>/dev/null)"; then
       local p_label p_left p_rel s_label s_left s_rel c_has c_unlimited c_balance
@@ -1054,6 +1204,19 @@ print_usage_details_for_home() {
 
       echo "--- usage & limits ---"
       echo
+      if [ "$fetch_status" -eq 10 ]; then
+        local cache_tsv stale_flag stale_age
+        if cache_tsv="$(printf "%s" "$rpc_json" | json_cache_info_to_tsv 2>/dev/null)"; then
+          IFS=$'\t' read -r stale_flag stale_age <<<"$cache_tsv"
+          if [ "$stale_flag" = "true" ]; then
+            echo "note: showing cached limits snapshot (${stale_age:-unknown})"
+            echo
+          fi
+        else
+          echo "note: showing cached limits snapshot"
+          echo
+        fi
+      fi
       echo "$p_label remaining: $(color_cyan "$p_left") $(color_cyan "$p_bar") ($(color_gray "$p_hint"))"
       echo "$s_label remaining: $(color_cyan "$s_left") $(color_cyan "$s_bar") ($(color_gray "$s_hint"))"
       echo "$credits_line"
@@ -1069,6 +1232,8 @@ print_usage_details_for_home() {
     err_lc="$(printf "%s" "$rpc_err" | tr '[:upper:]' '[:lower:]')"
     if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]]; then
       reason="not-logged"
+    elif [[ "$err_lc" == *"error sending request for url"* ]] || [[ "$err_lc" == *"dns error"* ]] || [[ "$err_lc" == *"connection refused"* ]] || [[ "$err_lc" == *"network is unreachable"* ]]; then
+      reason="network-error"
     elif [[ "$err_lc" == *"no rate limit snapshot"* ]]; then
       reason="no-limits"
     elif [[ "$err_lc" == *"timeout"* ]]; then
@@ -1114,6 +1279,8 @@ print_usage_table_row() {
   local check_char="-"
   if [ "$ok_flag" = "true" ]; then
     check_char="$(color_green "✓")"
+  elif [ "$ok_flag" = "cached" ]; then
+    check_char="$(color_yellow "~")"
   fi
 
   printf '| %-10s | %s %-29s | %-16s | %-15s |\n' \
@@ -2752,15 +2919,26 @@ print_usage_table_row_for_home() {
     return 0
   fi
 
-  local rpc_json rpc_err tsv err_file
+  local rpc_json rpc_err tsv err_file fetch_status
   err_file="$(mktemp)"
-  if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+  if rpc_json="$(fetch_usage_with_cache "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+    fetch_status=0
+  else
+    fetch_status=$?
+  fi
+
+  if [ "$fetch_status" -eq 0 ] || [ "$fetch_status" -eq 10 ]; then
     if tsv="$(printf "%s" "$rpc_json" | json_usage_to_tsv 2>/dev/null)"; then
-      local email plan p_left p_reset s_left s_reset five_h_cell weekly_cell
+      local email plan p_left p_reset s_left s_reset five_h_cell weekly_cell row_status
       IFS=$'\t' read -r email plan p_left p_reset s_left s_reset <<<"$tsv"
+      row_status="true"
+      if [ "$fetch_status" -eq 10 ]; then
+        row_status="cached"
+        email="${email} (cached)"
+      fi
       five_h_cell="$(compact_window_cell "$p_left" "$p_reset")"
       weekly_cell="$(compact_window_cell "$s_left" "$s_reset")"
-      print_usage_table_row "$display_label" "$email" "$five_h_cell" "$weekly_cell" "true"
+      print_usage_table_row "$display_label" "$email" "$five_h_cell" "$weekly_cell" "$row_status"
     else
       print_usage_table_row "$display_label" "parse-error" "-" "-" "false"
     fi
@@ -2771,6 +2949,8 @@ print_usage_table_row_for_home() {
     err_lc="$(printf "%s" "$rpc_err" | tr '[:upper:]' '[:lower:]')"
     if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]]; then
       status="not-logged"
+    elif [[ "$err_lc" == *"error sending request for url"* ]] || [[ "$err_lc" == *"dns error"* ]] || [[ "$err_lc" == *"connection refused"* ]] || [[ "$err_lc" == *"network is unreachable"* ]]; then
+      status="network-error"
     elif [[ "$err_lc" == *"no rate limit snapshot"* ]]; then
       status="no-limits"
     elif [[ "$err_lc" == *"timeout"* ]]; then
@@ -3017,7 +3197,15 @@ cmd_usage() {
     return 0
   fi
 
-  fetch_usage_via_rpc "$target_home" "$json_mode" "$refresh_mode"
+  local usage_json fetch_status
+  fetch_status=0
+  usage_json="$(fetch_usage_with_cache "$target_home" "$json_mode" "$refresh_mode")" || fetch_status=$?
+  if [ "$fetch_status" -eq 0 ] || [ "$fetch_status" -eq 10 ]; then
+    printf "%s" "$usage_json"
+    return 0
+  fi
+
+  return "$fetch_status"
 }
 
 cmd_list() {

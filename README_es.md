@@ -84,6 +84,13 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `limits <profile>` (sin `--json`) usa salida legible tipo dashboard: barras de `5h` y `weekly`, renovación en lenguaje natural y resumen de créditos.
 - `limits --all`/`limits -a` usa tabla compacta con columnas `profile`, `email`, `5h (reset)`, `weekly (reset)` y línea `Current default profile`.
 - `limits --json` conserva salida JSON cruda de rate limits para scripting/automatización.
+- Si el RPC en vivo falla pero existe un snapshot previo, `limits` ahora hace fallback al caché local (`<profile>/cache/codex-use-rate-limits.json`).
+- En `limits --all`, las filas en caché se marcan con `~` y `(cached)` en la columna de email.
+- En `status <profile>`, el fallback de caché se muestra explícitamente como `note: showing cached limits snapshot (...)`.
+- Estados de frescura en `limits --all`:
+- `✓` significa que el RPC en vivo respondió y los valores son frescos.
+- `~` significa que el RPC en vivo falló, pero se está usando snapshot en caché.
+- `network-error`/`rpc-error` significa que el RPC en vivo falló y no hay snapshot de caché utilizable.
 
 ## Salida de `backup status`
 - `backup status` muestra salud del respaldo con formato orientado a terminal (`key: value`): estado del repo/git, conteo de archivos origen vs backup, cobertura por `session_id` y deltas pendientes de copia/borrado.
