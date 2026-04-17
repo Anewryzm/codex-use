@@ -41,10 +41,11 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `codex-use backup add remote <url> [--name <remote>] [--dir <path>]`
 - `codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]`
 - `codex-use backup restore [--dir <path>] [--relaunch] [--delete]`
-- `codex-use limits [profile|default] [--all] [--json] [--refresh]`
+- `codex-use limits [profile|default] [--all] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]`
+- `codex-use limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]`
 - `codex-use list`
 - `codex-use whoami`
-- `codex-use status <profile> [--refresh]`
+- `codex-use status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]`
 - `codex-use logout <profile>`
 - `codex-use logout-default`
 
@@ -57,7 +58,7 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `usage` lee histórico local desde `~/.codex/sessions`.
 - `backup` crea snapshots de `~/.codex/sessions` en un repo Git (default: `~/codex-history-backup`).
 - `backup` por defecto solo copia (no borra). Usa `--delete` solo si quieres modo espejo.
-- `limits` consulta `codex app-server` con JSON-RPC (`initialize`, `account/read`, `account/rateLimits/read`).
+- `limits` es live-first: API directa `wham/usage` con token del perfil y fallback a RPC (`account/rateLimits/read`).
 
 ## Diagnóstico rápido cuando "no cambia la cuenta" en la app
 1. Ejecuta `codex-use list`.
@@ -84,13 +85,17 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `limits <profile>` (sin `--json`) usa salida legible tipo dashboard: barras de `5h` y `weekly`, renovación en lenguaje natural y resumen de créditos.
 - `limits --all`/`limits -a` usa tabla compacta con columnas `profile`, `email`, `5h (reset)`, `weekly (reset)` y línea `Current default profile`.
 - `limits --json` conserva salida JSON cruda de rate limits para scripting/automatización.
-- Si el RPC en vivo falla pero existe un snapshot previo, `limits` ahora hace fallback al caché local (`<profile>/cache/codex-use-rate-limits.json`).
+- `limits doctor` imprime diagnóstico de backend (`wham` y `rpc`), latencia, motivo de error, backend elegido y edad de caché.
+- Por default, `limits`/`status` **no** hacen fallback a caché. Fallan con error live si ningún backend responde.
+- Usa `--allow-cache` para habilitar fallback desde snapshot local (`<profile>/cache/codex-use-rate-limits.json`) cuando fallen los backends live.
+- Usa `--backend wham|rpc|auto` para forzar backend (`auto` prueba `wham` primero y luego `rpc`).
 - En `limits --all`, las filas en caché se marcan con `~` y `(cached)` en la columna de email.
 - En `status <profile>`, el fallback de caché se muestra explícitamente como `note: showing cached limits snapshot (...)`.
+- Usa `--live-only` para forzar explícitamente modo sin caché (igual que el default, salvo que pases `--allow-cache`).
 - Estados de frescura en `limits --all`:
-- `✓` significa que el RPC en vivo respondió y los valores son frescos.
-- `~` significa que el RPC en vivo falló, pero se está usando snapshot en caché.
-- `network-error`/`rpc-error` significa que el RPC en vivo falló y no hay snapshot de caché utilizable.
+- `✓` significa que un backend live respondió y los valores son frescos.
+- `~` significa que fallaron los backends live, pero se está usando snapshot en caché (`--allow-cache`).
+- `network-error`/`rpc-error` significa que fallaron los backends live y no se usó fallback de caché.
 
 ## Salida de `backup status`
 - `backup status` muestra salud del respaldo con formato orientado a terminal (`key: value`): estado del repo/git, conteo de archivos origen vs backup, cobertura por `session_id` y deltas pendientes de copia/borrado.

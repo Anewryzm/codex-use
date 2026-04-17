@@ -25,10 +25,11 @@ Usage:
   codex-use backup restore [--dir <path>] [--relaunch] [--delete]
   codex-use pricing show
   codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
-  codex-use limits [profile|default] [--all] [--json] [--refresh]
+  codex-use limits [profile|default] [--all] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]
+  codex-use limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]
   codex-use list
   codex-use whoami
-  codex-use status <profile> [--refresh]
+  codex-use status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]
   codex-use logout <profile>
   codex-use logout-default
 
@@ -44,7 +45,7 @@ Notes:
   - 'use' copies <profile>/auth.json into $DEFAULT_HOME/auth.json
   - 'usage' reads local session logs from: $HOME/.codex/sessions
   - 'backup' mirrors $DEFAULT_HOME/sessions into a git repo (default: $HISTORY_BACKUP_DIR_DEFAULT)
-  - 'limits' uses Codex app-server RPC (account/read + account/rateLimits/read)
+  - 'limits' is live-first via backend usage API (wham), with RPC fallback
   - 'pricing' stores overrides in:       $DEFAULT_HOME/pricing.json
   - 'add switch action' writes project actions to: <project>/.codex/environments/environment.toml
 USAGE
@@ -517,6 +518,169 @@ print_login_status_for_home() {
   fi
 }
 
+fetch_usage_via_wham() {
+  local target_home="$1"
+
+  node - "$target_home" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+
+const targetHome = process.argv[2];
+const authPath = path.join(targetHome, 'auth.json');
+const usageUrl = 'https://chatgpt.com/backend-api/wham/usage';
+
+function fail(code, msg) {
+  if (msg) process.stderr.write(msg + '\n');
+  process.exit(code);
+}
+
+function readAuth() {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+  } catch (err) {
+    fail(3, `WHAM usage probe failed: unable to read auth.json at ${authPath}: ${err.message}`);
+  }
+  return data;
+}
+
+function normalizeWindow(window) {
+  if (!window || typeof window !== 'object') return null;
+  const used = Number(window.used_percent);
+  const limitSecs = Number(window.limit_window_seconds);
+  const resetAfter = Number(window.reset_after_seconds);
+  const resetAtRaw = Number(window.reset_at);
+
+  let resetsAt = null;
+  if (Number.isFinite(resetAtRaw) && resetAtRaw > 0) {
+    resetsAt = Math.floor(resetAtRaw);
+  } else if (Number.isFinite(resetAfter)) {
+    resetsAt = Math.floor(Date.now() / 1000 + resetAfter);
+  }
+
+  return {
+    usedPercent: Number.isFinite(used) ? Math.max(0, Math.min(100, used)) : null,
+    windowDurationMins: Number.isFinite(limitSecs) && limitSecs > 0
+      ? Math.round(limitSecs / 60)
+      : null,
+    resetsAt,
+  };
+}
+
+function normalizeResponse(payload, auth) {
+  const rateLimit = payload?.rate_limit || {};
+  const primary = normalizeWindow(rateLimit.primary_window);
+  const secondary = normalizeWindow(rateLimit.secondary_window);
+  const creditsRaw = payload?.credits || null;
+  const credits = creditsRaw ? {
+    hasCredits: !!creditsRaw.has_credits,
+    unlimited: !!creditsRaw.unlimited,
+    balance: creditsRaw.balance == null ? null : creditsRaw.balance,
+  } : null;
+
+  return {
+    codexHome: targetHome,
+    account: {
+      email: payload?.email || null,
+      accountId: payload?.account_id || auth?.tokens?.account_id || null,
+      planType: payload?.plan_type || null,
+    },
+    requiresOpenaiAuth: false,
+    rateLimits: {
+      planType: payload?.plan_type || null,
+      primary,
+      secondary,
+      credits,
+    },
+    rateLimitsByLimitId: null,
+    _codexUseLive: {
+      source: 'wham',
+      fetchedAt: Math.floor(Date.now() / 1000),
+    },
+    _codexUseWham: {
+      allowed: !!rateLimit.allowed,
+      limitReached: !!rateLimit.limit_reached,
+      codeReviewRateLimit: payload?.code_review_rate_limit || null,
+      additionalRateLimits: payload?.additional_rate_limits || null,
+      rateLimitReachedType: payload?.rate_limit_reached_type || null,
+    },
+  };
+}
+
+function requestWham(token) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      method: 'GET',
+      hostname: 'chatgpt.com',
+      path: '/backend-api/wham/usage',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        'User-Agent': 'codex-use/0.2.0',
+      },
+    }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ statusCode: Number(res.statusCode || 0), body }));
+    });
+
+    req.setTimeout(20000, () => {
+      req.destroy(new Error('timeout for wham/usage'));
+    });
+
+    req.on('error', (err) => reject(err));
+    req.end();
+  });
+}
+
+(async () => {
+  const auth = readAuth();
+  const accessToken = auth?.tokens?.access_token;
+  if (!accessToken) {
+    fail(3, 'WHAM usage probe failed: not logged in (missing access token)');
+  }
+
+  let res;
+  try {
+    res = await requestWham(accessToken);
+  } catch (err) {
+    fail(
+      4,
+      `WHAM usage probe failed: error sending request for url (${usageUrl}): ${err.message}`
+    );
+  }
+
+  const status = Number(res?.statusCode || 0);
+  let payload = null;
+  try {
+    payload = JSON.parse(res?.body || '{}');
+  } catch {
+    payload = null;
+  }
+
+  if (status === 401 || status === 403) {
+    fail(2, `WHAM usage probe failed: wham-http-${status} auth-expired`);
+  }
+
+  if (status !== 200) {
+    const summary = (res?.body || '').toString().replace(/\s+/g, ' ').slice(0, 220);
+    fail(1, `WHAM usage probe failed: wham-http-${status} ${summary}`);
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    fail(1, 'WHAM usage probe failed: malformed response payload');
+  }
+
+  const out = normalizeResponse(payload, auth);
+  process.stdout.write(JSON.stringify(out, null, 2));
+})().catch((err) => {
+  fail(1, `WHAM usage probe failed: ${err.message}`);
+});
+NODE
+}
+
 fetch_usage_via_rpc() {
   local target_home="$1"
   local json_mode="$2"
@@ -542,7 +706,7 @@ function done(code) {
   setTimeout(() => process.exit(code), 80);
 }
 
-function send(method, params) {
+function send(method, params, timeoutMs = 12000) {
   const id = seq++;
   const msg = { jsonrpc: '2.0', id, method };
   if (params !== undefined) msg.params = params;
@@ -551,9 +715,59 @@ function send(method, params) {
     const t = setTimeout(() => {
       pending.delete(id);
       reject(new Error(`timeout for ${method}`));
-    }, 12000);
+    }, timeoutMs);
     pending.set(id, { resolve, reject, t });
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableRateLimitErr(msg) {
+  const s = String(msg || '').toLowerCase();
+  return (
+    s.includes('failed to fetch codex rate limits')
+    || s.includes('error sending request for url')
+    || s.includes('dns error')
+    || s.includes('connection refused')
+    || s.includes('network is unreachable')
+    || s.includes('connection reset')
+    || s.includes('temporarily unavailable')
+    || s.includes('timeout')
+    || s.includes('timed out')
+    || s.includes('http status 429')
+    || s.includes('http status 500')
+    || s.includes('http status 502')
+    || s.includes('http status 503')
+    || s.includes('http status 504')
+  );
+}
+
+async function readAccountWithCompat() {
+  try {
+    return await send('account/read', { refreshToken: refreshMode }, 12000);
+  } catch (err) {
+    // Older app-server builds used forceRefresh.
+    return await send('account/read', { forceRefresh: refreshMode }, 12000);
+  }
+}
+
+async function readRateLimitsWithRetry() {
+  const attempts = 3;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await send('account/rateLimits/read', undefined, 20000);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= attempts || !isRetryableRateLimitErr(err?.message || err)) {
+        throw err;
+      }
+      await sleep(400 * attempt);
+    }
+  }
+  throw lastErr || new Error('failed to fetch codex rate limits');
 }
 
 child.stderr.on('data', (d) => {
@@ -625,8 +839,8 @@ function resetText(epochSeconds) {
       clientInfo: { name: 'codex-use', version: '0.2.0' },
     });
 
-    const accountResp = await send('account/read', { forceRefresh: refreshMode });
-    const limitsResp = await send('account/rateLimits/read');
+    const accountResp = await readAccountWithCompat();
+    const limitsResp = await readRateLimitsWithRetry();
 
     const account = accountResp?.account || null;
     const snapshot = (limitsResp?.rateLimitsByLimitId && (limitsResp.rateLimitsByLimitId.codex || Object.values(limitsResp.rateLimitsByLimitId)[0]))
@@ -643,6 +857,10 @@ function resetText(epochSeconds) {
       requiresOpenaiAuth: !!accountResp?.requiresOpenaiAuth,
       rateLimits: snapshot,
       rateLimitsByLimitId: limitsResp?.rateLimitsByLimitId || null,
+      _codexUseLive: {
+        source: 'rpc',
+        fetchedAt: Math.floor(Date.now() / 1000),
+      },
     };
 
     if (jsonMode) {
@@ -697,6 +915,130 @@ function resetText(epochSeconds) {
 NODE
 }
 
+refresh_auth_via_rpc() {
+  local target_home="$1"
+
+  CODEX_HOME="$target_home" node - "$CODEX_BIN" <<'NODE'
+const { spawn } = require('child_process');
+
+const codexBin = process.argv[2] || 'codex';
+const child = spawn(codexBin, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] });
+let buf = '';
+let settled = false;
+let seq = 1;
+const pending = new Map();
+
+function done(code) {
+  if (settled) return;
+  settled = true;
+  try { child.kill('SIGTERM'); } catch {}
+  setTimeout(() => process.exit(code), 80);
+}
+
+function send(method, params, timeoutMs = 12000) {
+  const id = seq++;
+  const msg = { jsonrpc: '2.0', id, method };
+  if (params !== undefined) msg.params = params;
+  child.stdin.write(JSON.stringify(msg) + '\n');
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`timeout for ${method}`));
+    }, timeoutMs);
+    pending.set(id, { resolve, reject, t });
+  });
+}
+
+async function readAccountWithCompat(forceRefresh = true) {
+  try {
+    return await send('account/read', { refreshToken: forceRefresh }, 12000);
+  } catch {
+    return await send('account/read', { forceRefresh }, 12000);
+  }
+}
+
+child.stdout.on('data', (chunk) => {
+  buf += chunk.toString('utf8');
+  let idx;
+  while ((idx = buf.indexOf('\n')) >= 0) {
+    const line = buf.slice(0, idx).trim();
+    buf = buf.slice(idx + 1);
+    if (!line) continue;
+    let msg;
+    try { msg = JSON.parse(line); } catch { continue; }
+    if (msg.id != null && pending.has(msg.id)) {
+      const p = pending.get(msg.id);
+      clearTimeout(p.t);
+      pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error?.message || JSON.stringify(msg.error)));
+      else p.resolve(msg.result);
+    }
+  }
+});
+
+child.stderr.on('data', (d) => {
+  const s = d.toString('utf8').trim();
+  if (!s) return;
+  if (/ERROR|not logged in|requiresOpenaiAuth|refresh/i.test(s)) {
+    process.stderr.write(s + '\n');
+  }
+});
+
+child.on('error', (err) => {
+  console.error(`RPC auth refresh failed: spawn error: ${err.message}`);
+  done(1);
+});
+
+(async () => {
+  try {
+    await send('initialize', {
+      clientInfo: { name: 'codex-use', version: '0.2.0' },
+    });
+    const accountResp = await readAccountWithCompat(true);
+    if (accountResp?.requiresOpenaiAuth) {
+      throw new Error('requiresOpenaiAuth');
+    }
+    done(0);
+  } catch (err) {
+    console.error(`RPC auth refresh failed: ${err.message}`);
+    done(1);
+  }
+})();
+NODE
+}
+
+normalize_backend_mode() {
+  local raw="${1:-auto}"
+  local mode
+  mode="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$mode" in
+    auto|wham|rpc)
+      printf '%s' "$mode"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+classify_usage_error_reason() {
+  local raw="${1:-}"
+  local err_lc
+  err_lc="$(printf "%s" "$raw" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]] || [[ "$err_lc" == *"auth-expired"* ]] || [[ "$err_lc" == *"wham-http-401"* ]] || [[ "$err_lc" == *"wham-http-403"* ]]; then
+    echo "not-logged"
+  elif [[ "$err_lc" == *"error sending request for url"* ]] || [[ "$err_lc" == *"dns error"* ]] || [[ "$err_lc" == *"could not resolve host"* ]] || [[ "$err_lc" == *"connection refused"* ]] || [[ "$err_lc" == *"network is unreachable"* ]] || [[ "$err_lc" == *"connection reset"* ]]; then
+    echo "network-error"
+  elif [[ "$err_lc" == *"no rate limit snapshot"* ]] || [[ "$err_lc" == *"no-limits"* ]]; then
+    echo "no-limits"
+  elif [[ "$err_lc" == *"timeout"* ]]; then
+    echo "timeout"
+  else
+    echo "rpc-error"
+  fi
+}
+
 limits_cache_file() {
   local target_home="$1"
   echo "$target_home/cache/codex-use-rate-limits.json"
@@ -705,6 +1047,7 @@ limits_cache_file() {
 write_limits_cache() {
   local target_home="$1"
   local payload_json="$2"
+  local source="${3:-live}"
   local cache_file cache_dir
   cache_file="$(limits_cache_file "$target_home")"
   cache_dir="$(dirname "$cache_file")"
@@ -726,12 +1069,12 @@ const meta = (data && typeof data === "object" && data._codexUseCache && typeof 
   : {};
 data._codexUseCache = {
   ...meta,
-  source: "rpc",
+  source: process.argv[2] || "live",
   fetchedAt: Math.floor(Date.now() / 1000),
   stale: false,
 };
 fs.writeFileSync(cachePath, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
-' "$cache_file"
+' "$cache_file" "$source"
   then
     return 0
   fi
@@ -782,28 +1125,103 @@ fetch_usage_with_cache() {
   local target_home="$1"
   local _json_mode="${2:-true}"
   local refresh_mode="${3:-false}"
+  local live_only="${4:-false}"
+  local allow_cache="${5:-false}"
+  local backend_mode="${6:-auto}"
+  local normalized_backend
+  normalized_backend="$(normalize_backend_mode "$backend_mode" || true)"
+  [ -n "$normalized_backend" ] || normalized_backend="auto"
 
-  local rpc_json err_file rpc_err
-  err_file="$(mktemp)"
-  if rpc_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
-    rm -f "$err_file"
-    write_limits_cache "$target_home" "$rpc_json" || true
-    printf "%s" "$rpc_json"
+  if [ "$live_only" = "true" ]; then
+    allow_cache="false"
+  fi
+
+  local use_wham="false"
+  local use_rpc="false"
+  case "$normalized_backend" in
+    auto)
+      use_wham="true"
+      use_rpc="true"
+      ;;
+    wham)
+      use_wham="true"
+      ;;
+    rpc)
+      use_rpc="true"
+      ;;
+  esac
+
+  local live_json live_source
+  local err_agg=""
+  local err_file err_text rc
+
+  if [ "$refresh_mode" = "true" ]; then
+    if ! refresh_auth_via_rpc "$target_home" >/dev/null 2>&1; then
+      err_agg="${err_agg}[refresh] token refresh probe failed before live fetch\n"
+    fi
+  fi
+
+  if [ "$use_wham" = "true" ]; then
+    err_file="$(mktemp)"
+    if live_json="$(fetch_usage_via_wham "$target_home" 2>"$err_file")"; then
+      rm -f "$err_file"
+      live_source="wham"
+    else
+      rc=$?
+      err_text="$(cat "$err_file" 2>/dev/null || true)"
+      rm -f "$err_file"
+      [ -z "$err_text" ] || err_agg="${err_agg}[wham] ${err_text}\n"
+      if [ "$rc" -eq 2 ]; then
+        if refresh_auth_via_rpc "$target_home" >/dev/null 2>&1; then
+          err_file="$(mktemp)"
+          if live_json="$(fetch_usage_via_wham "$target_home" 2>"$err_file")"; then
+            rm -f "$err_file"
+            live_source="wham"
+          else
+            err_text="$(cat "$err_file" 2>/dev/null || true)"
+            rm -f "$err_file"
+            [ -z "$err_text" ] || err_agg="${err_agg}[wham-retry] ${err_text}\n"
+          fi
+        else
+          err_agg="${err_agg}[refresh] token refresh failed after auth-expired\n"
+        fi
+      fi
+    fi
+  fi
+
+  if [ -z "$live_source" ] && [ "$use_rpc" = "true" ]; then
+    err_file="$(mktemp)"
+    if live_json="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+      rm -f "$err_file"
+      live_source="rpc"
+    else
+      err_text="$(cat "$err_file" 2>/dev/null || true)"
+      rm -f "$err_file"
+      [ -z "$err_text" ] || err_agg="${err_agg}[rpc] ${err_text}\n"
+    fi
+  fi
+
+  if [ -n "$live_source" ]; then
+    write_limits_cache "$target_home" "$live_json" "$live_source" || true
+    printf "%s" "$live_json"
     return 0
   fi
 
   local cached_json
-  rpc_err="$(cat "$err_file" 2>/dev/null || true)"
-  rm -f "$err_file"
   if cached_json="$(read_limits_cache_decorated "$target_home")"; then
+    if [ "$allow_cache" != "true" ]; then
+      [ -z "$err_agg" ] || printf "%b" "$err_agg" >&2
+      return 1
+    fi
     local cache_file
     cache_file="$(limits_cache_file "$target_home")"
-    echo "RPC usage probe failed; using cached limits snapshot from $cache_file" >&2
+    [ -z "$err_agg" ] || printf "%b" "$err_agg" >&2
+    echo "Live usage probe failed; using cached limits snapshot from $cache_file" >&2
     printf "%s" "$cached_json"
     return 10
   fi
 
-  [ -z "$rpc_err" ] || printf "%s" "$rpc_err" >&2
+  [ -z "$err_agg" ] || printf "%b" "$err_agg" >&2
   return 1
 }
 
@@ -1181,10 +1599,13 @@ process.stdout.write(row.join("\t"));
 print_usage_details_for_home() {
   local target_home="$1"
   local refresh_mode="${2:-false}"
+  local live_only="${3:-false}"
+  local allow_cache="${4:-false}"
+  local backend_mode="${5:-auto}"
 
   local rpc_json err_file fetch_status
   err_file="$(mktemp)"
-  if rpc_json="$(fetch_usage_with_cache "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+  if rpc_json="$(fetch_usage_with_cache "$target_home" "true" "$refresh_mode" "$live_only" "$allow_cache" "$backend_mode" 2>"$err_file")"; then
     fetch_status=0
   else
     fetch_status=$?
@@ -1226,21 +1647,10 @@ print_usage_details_for_home() {
       echo "usage unavailable: parse-error"
     fi
   else
-    local rpc_err err_lc reason
+    local rpc_err reason
     rpc_err="$(cat "$err_file")"
     rpc_err="$(echo "$rpc_err" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
-    err_lc="$(printf "%s" "$rpc_err" | tr '[:upper:]' '[:lower:]')"
-    if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]]; then
-      reason="not-logged"
-    elif [[ "$err_lc" == *"error sending request for url"* ]] || [[ "$err_lc" == *"dns error"* ]] || [[ "$err_lc" == *"connection refused"* ]] || [[ "$err_lc" == *"network is unreachable"* ]]; then
-      reason="network-error"
-    elif [[ "$err_lc" == *"no rate limit snapshot"* ]]; then
-      reason="no-limits"
-    elif [[ "$err_lc" == *"timeout"* ]]; then
-      reason="timeout"
-    else
-      reason="rpc-error"
-    fi
+    reason="$(classify_usage_error_reason "$rpc_err")"
 
     echo "--- usage & limits ---"
     echo
@@ -1293,6 +1703,221 @@ print_usage_table_row() {
 
 print_usage_table_footer() {
   printf '+------------+---------------------------------+------------------+-----------------+\n'
+}
+
+now_epoch_ms() {
+  node -e 'process.stdout.write(String(Date.now()))'
+}
+
+probe_live_backend_for_home() {
+  local source="$1"
+  local target_home="$2"
+  local refresh_mode="$3"
+
+  local start_ms end_ms elapsed_ms err_file out rc err reason
+  start_ms="$(now_epoch_ms)"
+  err_file="$(mktemp)"
+  if [ "$source" = "wham" ]; then
+    if out="$(fetch_usage_via_wham "$target_home" 2>"$err_file")"; then
+      rc=0
+    else
+      rc=$?
+    fi
+  else
+    if out="$(fetch_usage_via_rpc "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+      rc=0
+    else
+      rc=$?
+    fi
+  fi
+  end_ms="$(now_epoch_ms)"
+  elapsed_ms="$((end_ms - start_ms))"
+
+  if [ "$rc" -eq 0 ]; then
+    local tsv email p_left p_reset s_left s_reset
+    if tsv="$(printf "%s" "$out" | json_usage_to_tsv 2>/dev/null)"; then
+      IFS=$'\t' read -r email _plan p_left p_reset s_left s_reset <<<"$tsv"
+    else
+      email="-"
+      p_left="-"
+      p_reset="-"
+      s_left="-"
+      s_reset="-"
+    fi
+    printf 'ok\t%s\t-\t%s\t%s\t%s\t%s\t%s\n' "$elapsed_ms" "$email" "$p_left" "$p_reset" "$s_left" "$s_reset"
+    rm -f "$err_file"
+    return 0
+  fi
+
+  err="$(cat "$err_file" 2>/dev/null || true)"
+  rm -f "$err_file"
+  reason="$(classify_usage_error_reason "$err")"
+  printf 'error\t%s\t%s\t-\t-\t-\t-\t-\n' "$elapsed_ms" "$reason"
+  return 1
+}
+
+print_limits_doctor_for_home() {
+  local label="$1"
+  local target_home="$2"
+  local refresh_mode="$3"
+  local allow_cache="$4"
+  local backend_mode="$5"
+
+  local auth_path
+  auth_path="$(auth_file "$target_home")"
+  echo "[$label]"
+  if [ ! -f "$auth_path" ]; then
+    echo "  auth: missing ($auth_path)"
+    echo
+    return 0
+  fi
+  echo "  auth: ok ($auth_path)"
+
+  local wham_tsv rpc_tsv
+  wham_tsv="$(probe_live_backend_for_home "wham" "$target_home" "$refresh_mode")" || true
+  rpc_tsv="$(probe_live_backend_for_home "rpc" "$target_home" "$refresh_mode")" || true
+
+  local wham_state wham_ms wham_reason wham_email wham_5h wham_5h_reset wham_weekly wham_weekly_reset
+  local rpc_state rpc_ms rpc_reason rpc_email rpc_5h rpc_5h_reset rpc_weekly rpc_weekly_reset
+  IFS=$'\t' read -r wham_state wham_ms wham_reason wham_email wham_5h wham_5h_reset wham_weekly wham_weekly_reset <<<"$wham_tsv"
+  IFS=$'\t' read -r rpc_state rpc_ms rpc_reason rpc_email rpc_5h rpc_5h_reset rpc_weekly rpc_weekly_reset <<<"$rpc_tsv"
+
+  if [ "$wham_state" = "ok" ]; then
+    echo "  wham: ok (${wham_ms}ms) email=${wham_email} 5h=${wham_5h} (${wham_5h_reset}) weekly=${wham_weekly} (${wham_weekly_reset})"
+  else
+    echo "  wham: error (${wham_ms}ms) reason=${wham_reason}"
+  fi
+
+  if [ "$rpc_state" = "ok" ]; then
+    echo "  rpc:  ok (${rpc_ms}ms) email=${rpc_email} 5h=${rpc_5h} (${rpc_5h_reset}) weekly=${rpc_weekly} (${rpc_weekly_reset})"
+  else
+    echo "  rpc:  error (${rpc_ms}ms) reason=${rpc_reason}"
+  fi
+
+  local resolved_backend
+  case "$backend_mode" in
+    wham)
+      if [ "$wham_state" = "ok" ]; then resolved_backend="wham"; else resolved_backend="error"; fi
+      ;;
+    rpc)
+      if [ "$rpc_state" = "ok" ]; then resolved_backend="rpc"; else resolved_backend="error"; fi
+      ;;
+    auto|*)
+      if [ "$wham_state" = "ok" ]; then
+        resolved_backend="wham"
+      elif [ "$rpc_state" = "ok" ]; then
+        resolved_backend="rpc"
+      else
+        resolved_backend="error"
+      fi
+      ;;
+  esac
+
+  local cache_file cache_info
+  cache_file="$(limits_cache_file "$target_home")"
+  if [ -f "$cache_file" ]; then
+    cache_info="$(node -e '
+const fs = require("fs");
+const p = process.argv[1];
+let j = {};
+try { j = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+const m = j?._codexUseCache || {};
+const fetchedAt = Number(m.fetchedAt);
+const source = m.source || "unknown";
+if (!Number.isFinite(fetchedAt) || fetchedAt <= 0) {
+  process.stdout.write(`${source}\tunknown`);
+} else {
+  const ageSecs = Math.max(0, Math.floor(Date.now() / 1000) - Math.floor(fetchedAt));
+  process.stdout.write(`${source}\t${ageSecs}s`);
+}
+' "$cache_file" 2>/dev/null || true)"
+    local cache_source cache_age
+    IFS=$'\t' read -r cache_source cache_age <<<"$cache_info"
+    echo "  cache: present source=${cache_source:-unknown} age=${cache_age:-unknown}"
+  else
+    echo "  cache: missing"
+  fi
+
+  echo "  selected-backend(mode=${backend_mode}): ${resolved_backend}"
+  echo "  allow-cache: ${allow_cache}"
+  echo
+}
+
+cmd_limits_doctor() {
+  ensure_dirs
+
+  local refresh_mode="false"
+  local allow_cache="false"
+  local backend_mode="auto"
+  local all_mode="false"
+  local profile=""
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --refresh)
+        refresh_mode="true"
+        ;;
+      --allow-cache)
+        allow_cache="true"
+        ;;
+      --backend)
+        shift
+        backend_mode="${1:-}"
+        [ -n "$backend_mode" ] || die "Missing value for --backend (allowed: auto, wham, rpc)"
+        ;;
+      --all|-a)
+        all_mode="true"
+        ;;
+      -h|--help)
+        echo "Usage: codex-use limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]"
+        echo "Examples:"
+        echo "  codex-use limits doctor"
+        echo "  codex-use limits doctor personal"
+        echo "  codex-use limits doctor --all --backend auto"
+        return 0
+        ;;
+      *)
+        if [[ "$1" == --* ]]; then
+          die "Unknown option '$1'. Usage: codex-use limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]"
+        fi
+        if [ -n "$profile" ]; then
+          die "Only one profile argument is allowed for limits doctor."
+        fi
+        profile="$1"
+        ;;
+    esac
+    shift
+  done
+
+  backend_mode="$(normalize_backend_mode "$backend_mode" || true)"
+  [ -n "$backend_mode" ] || die "Invalid --backend value. Allowed: auto, wham, rpc."
+
+  if [ "$all_mode" = "true" ] && [ -n "$profile" ]; then
+    die "Do not pass a profile with --all."
+  fi
+
+  if [ -n "$profile" ]; then
+    if [ "$profile" = "default" ]; then
+      print_limits_doctor_for_home "default" "$DEFAULT_HOME" "$refresh_mode" "$allow_cache" "$backend_mode"
+      return 0
+    fi
+    validate_profile "$profile"
+    local p_home
+    p_home="$(profile_home "$profile")"
+    [ -d "$p_home" ] || die "Profile '$profile' does not exist"
+    print_limits_doctor_for_home "$profile" "$p_home" "$refresh_mode" "$allow_cache" "$backend_mode"
+    return 0
+  fi
+
+  print_current_default_profile_line "$(normalized_active_profile)"
+  echo
+  while IFS='|' read -r label target_home; do
+    [ -n "$label" ] || continue
+    if [ "$label" = "default" ]; then
+      continue
+    fi
+    print_limits_doctor_for_home "$label" "$target_home" "$refresh_mode" "$allow_cache" "$backend_mode"
+  done < <(collect_usage_targets)
 }
 
 historical_usage_json() {
@@ -2906,6 +3531,9 @@ print_usage_table_row_for_home() {
   local target_home="$2"
   local refresh_mode="$3"
   local mark_active="${4:-false}"
+  local live_only="${5:-false}"
+  local allow_cache="${6:-false}"
+  local backend_mode="${7:-auto}"
 
   local display_label="$label"
   if [ "$mark_active" = "true" ]; then
@@ -2921,7 +3549,7 @@ print_usage_table_row_for_home() {
 
   local rpc_json rpc_err tsv err_file fetch_status
   err_file="$(mktemp)"
-  if rpc_json="$(fetch_usage_with_cache "$target_home" "true" "$refresh_mode" 2>"$err_file")"; then
+  if rpc_json="$(fetch_usage_with_cache "$target_home" "true" "$refresh_mode" "$live_only" "$allow_cache" "$backend_mode" 2>"$err_file")"; then
     fetch_status=0
   else
     fetch_status=$?
@@ -2945,19 +3573,8 @@ print_usage_table_row_for_home() {
   else
     rpc_err="$(cat "$err_file")"
     rpc_err="$(echo "$rpc_err" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
-    local err_lc status
-    err_lc="$(printf "%s" "$rpc_err" | tr '[:upper:]' '[:lower:]')"
-    if [[ "$err_lc" == *"not logged in"* ]] || [[ "$err_lc" == *"requiresopenaiauth"* ]]; then
-      status="not-logged"
-    elif [[ "$err_lc" == *"error sending request for url"* ]] || [[ "$err_lc" == *"dns error"* ]] || [[ "$err_lc" == *"connection refused"* ]] || [[ "$err_lc" == *"network is unreachable"* ]]; then
-      status="network-error"
-    elif [[ "$err_lc" == *"no rate limit snapshot"* ]]; then
-      status="no-limits"
-    elif [[ "$err_lc" == *"timeout"* ]]; then
-      status="timeout"
-    else
-      status="rpc-error"
-    fi
+    local status
+    status="$(classify_usage_error_reason "$rpc_err")"
     print_usage_table_row "$display_label" "$status" "-" "-" "false"
   fi
   rm -f "$err_file"
@@ -3077,11 +3694,20 @@ cmd_usage() {
     command_mode="usage"
   fi
 
+  if [ "$command_mode" = "limits" ] && [ "${1:-}" = "doctor" ]; then
+    shift || true
+    cmd_limits_doctor "$@"
+    return $?
+  fi
+
   ensure_dirs
 
   local profile="default"
   local json_mode="false"
   local refresh_mode="false"
+  local live_only="false"
+  local allow_cache="false"
+  local backend_mode="auto"
   local all_mode="false"
   local profile_set="false"
 
@@ -3099,6 +3725,17 @@ cmd_usage() {
       --refresh)
         refresh_mode="true"
         ;;
+      --live-only)
+        live_only="true"
+        ;;
+      --allow-cache)
+        allow_cache="true"
+        ;;
+      --backend)
+        shift
+        backend_mode="${1:-}"
+        [ -n "$backend_mode" ] || die "Missing value for --backend (allowed: auto, wham, rpc)"
+        ;;
       default)
         profile="default"
         profile_set="true"
@@ -3110,13 +3747,16 @@ cmd_usage() {
           echo "  codex-use usage"
           echo "  codex-use usage --json"
         else
-          echo "Usage: codex-use limits [profile|default] [--all|-a] [--json] [--refresh]"
+          echo "Usage: codex-use limits [profile|default] [--all|-a] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
           echo "Examples:"
           echo "  codex-use limits"
           echo "  codex-use limits trabajo"
           echo "  codex-use limits default --json"
           echo "  codex-use limits --all"
           echo "  codex-use limits -a"
+          echo "  codex-use limits --all --backend wham"
+          echo "  codex-use limits --all --allow-cache"
+          echo "  codex-use limits doctor --all"
         fi
         return 0
         ;;
@@ -3135,6 +3775,9 @@ cmd_usage() {
   done
 
   if [ "$command_mode" = "usage" ]; then
+    [ "$live_only" != "true" ] || die "--live-only only applies to 'limits'."
+    [ "$allow_cache" != "true" ] || die "--allow-cache only applies to 'limits'."
+    [ "$backend_mode" = "auto" ] || die "--backend only applies to 'limits'."
     if [ "$json_mode" = "true" ]; then
       historical_usage_json
       return 0
@@ -3142,6 +3785,12 @@ cmd_usage() {
 
     print_historical_usage_table
     return 0
+  fi
+
+  backend_mode="$(normalize_backend_mode "$backend_mode" || true)"
+  [ -n "$backend_mode" ] || die "Invalid --backend value. Allowed: auto, wham, rpc."
+  if [ "$live_only" = "true" ] && [ "$allow_cache" = "true" ]; then
+    die "Do not combine --live-only with --allow-cache."
   fi
 
   if [ "$all_mode" = "true" ]; then
@@ -3163,7 +3812,7 @@ cmd_usage() {
       if [ -n "$active_profile_for_default" ] && [ "$label" = "$active_profile_for_default" ]; then
         mark_active="true"
       fi
-      print_usage_table_row_for_home "$label" "$target_home" "$refresh_mode" "$mark_active"
+      print_usage_table_row_for_home "$label" "$target_home" "$refresh_mode" "$mark_active" "$live_only" "$allow_cache" "$backend_mode"
     done < <(collect_usage_targets)
     print_usage_table_footer
     return 0
@@ -3192,14 +3841,14 @@ cmd_usage() {
     if [ "$label" != "default" ] && [ -n "$active_profile_for_default" ] && [ "$label" = "$active_profile_for_default" ]; then
       mark_active="true"
     fi
-    print_usage_table_row_for_home "$label" "$target_home" "$refresh_mode" "$mark_active"
+    print_usage_table_row_for_home "$label" "$target_home" "$refresh_mode" "$mark_active" "$live_only" "$allow_cache" "$backend_mode"
     print_usage_table_footer
     return 0
   fi
 
   local usage_json fetch_status
   fetch_status=0
-  usage_json="$(fetch_usage_with_cache "$target_home" "$json_mode" "$refresh_mode")" || fetch_status=$?
+  usage_json="$(fetch_usage_with_cache "$target_home" "$json_mode" "$refresh_mode" "$live_only" "$allow_cache" "$backend_mode")" || fetch_status=$?
   if [ "$fetch_status" -eq 0 ] || [ "$fetch_status" -eq 10 ]; then
     printf "%s" "$usage_json"
     return 0
@@ -3281,21 +3930,41 @@ cmd_whoami() {
 cmd_status() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codex-use status <profile> [--refresh]"
+  [ -n "$profile" ] || die "Usage: codex-use status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
   validate_profile "$profile"
 
   local refresh_mode="false"
+  local live_only="false"
+  local allow_cache="false"
+  local backend_mode="auto"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --refresh)
         refresh_mode="true"
         ;;
+      --live-only)
+        live_only="true"
+        ;;
+      --allow-cache)
+        allow_cache="true"
+        ;;
+      --backend)
+        shift
+        backend_mode="${1:-}"
+        [ -n "$backend_mode" ] || die "Missing value for --backend (allowed: auto, wham, rpc)"
+        ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use status <profile> [--refresh]"
+        die "Unknown option '$1'. Usage: codex-use status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
         ;;
     esac
     shift
   done
+
+  backend_mode="$(normalize_backend_mode "$backend_mode" || true)"
+  [ -n "$backend_mode" ] || die "Invalid --backend value. Allowed: auto, wham, rpc."
+  if [ "$live_only" = "true" ] && [ "$allow_cache" = "true" ]; then
+    die "Do not combine --live-only with --allow-cache."
+  fi
 
   local p_home
   p_home="$(profile_home "$profile")"
@@ -3312,7 +3981,7 @@ cmd_status() {
   echo
   print_auth_summary_whoami "$p_auth"
   echo
-  print_usage_details_for_home "$p_home" "$refresh_mode"
+  print_usage_details_for_home "$p_home" "$refresh_mode" "$live_only" "$allow_cache" "$backend_mode"
 }
 
 cmd_logout() {
