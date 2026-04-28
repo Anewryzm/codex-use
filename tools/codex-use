@@ -4,6 +4,7 @@ set -euo pipefail
 DEFAULT_HOME="${CODEX_DEFAULT_HOME:-$HOME/.codex}"
 PROFILES_ROOT="${CODEX_PROFILES_HOME:-$HOME/.codex-profiles}"
 CODEX_BIN="${CODEX_BIN:-codex}"
+CODEX_FORCE_FILE_AUTH="${CODEX_FORCE_FILE_AUTH:-1}"
 BACKUP_DIR="$DEFAULT_HOME/backups"
 HISTORY_BACKUP_DIR_DEFAULT="${CODEX_HISTORY_BACKUP_DIR:-$HOME/codex-history-backup}"
 
@@ -54,6 +55,14 @@ USAGE
 die() {
   echo "Error: $*" >&2
   exit 1
+}
+
+run_codex() {
+  if [ "${CODEX_FORCE_FILE_AUTH}" = "1" ] || [ "${CODEX_FORCE_FILE_AUTH}" = "true" ]; then
+    "$CODEX_BIN" -c 'cli_auth_credentials_store="file"' "$@"
+    return $?
+  fi
+  "$CODEX_BIN" "$@"
 }
 
 ensure_dirs() {
@@ -511,7 +520,7 @@ NODE
 print_login_status_for_home() {
   local target_home="$1"
   local login_status
-  login_status="$(CODEX_HOME="$target_home" "$CODEX_BIN" login status 2>&1 || true)"
+  login_status="$(CODEX_HOME="$target_home" run_codex login status 2>&1 || true)"
   login_status="$(printf '%s\n' "$login_status" | sed '/^WARNING: proceeding, even though we could not update PATH:/d')"
   if [ -n "$(printf '%s' "$login_status" | tr -d '[:space:]')" ]; then
     printf '%s\n' "$login_status"
@@ -685,15 +694,20 @@ fetch_usage_via_rpc() {
   local target_home="$1"
   local json_mode="$2"
   local refresh_mode="$3"
+  local force_file_auth="${CODEX_FORCE_FILE_AUTH:-1}"
 
-  CODEX_HOME="$target_home" node - "$CODEX_BIN" "$json_mode" "$refresh_mode" <<'NODE'
+  CODEX_HOME="$target_home" node - "$CODEX_BIN" "$json_mode" "$refresh_mode" "$force_file_auth" <<'NODE'
 const { spawn } = require('child_process');
 
 const codexBin = process.argv[2] || 'codex';
 const jsonMode = process.argv[3] === 'true';
 const refreshMode = process.argv[4] === 'true';
+const forceFileAuth = ['1', 'true'].includes(String(process.argv[5] || '').toLowerCase());
 
-const child = spawn(codexBin, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] });
+const childArgs = forceFileAuth
+  ? ['-c', 'cli_auth_credentials_store="file"', 'app-server']
+  : ['app-server'];
+const child = spawn(codexBin, childArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
 let buf = '';
 let settled = false;
 let seq = 1;
@@ -917,12 +931,17 @@ NODE
 
 refresh_auth_via_rpc() {
   local target_home="$1"
+  local force_file_auth="${CODEX_FORCE_FILE_AUTH:-1}"
 
-  CODEX_HOME="$target_home" node - "$CODEX_BIN" <<'NODE'
+  CODEX_HOME="$target_home" node - "$CODEX_BIN" "$force_file_auth" <<'NODE'
 const { spawn } = require('child_process');
 
 const codexBin = process.argv[2] || 'codex';
-const child = spawn(codexBin, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] });
+const forceFileAuth = ['1', 'true'].includes(String(process.argv[3] || '').toLowerCase());
+const childArgs = forceFileAuth
+  ? ['-c', 'cli_auth_credentials_store="file"', 'app-server']
+  : ['app-server'];
+const child = spawn(codexBin, childArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
 let buf = '';
 let settled = false;
 let seq = 1;
@@ -3592,7 +3611,7 @@ cmd_login() {
   mkdir -p "$p_home"
 
   echo "Logging in profile '$profile' at: $p_home"
-  CODEX_HOME="$p_home" "$CODEX_BIN" login "$@"
+  CODEX_HOME="$p_home" run_codex login "$@"
 
   echo "Profile '$profile' login complete."
   echo "--- auth summary ($profile) ---"
@@ -3791,6 +3810,9 @@ cmd_usage() {
   [ -n "$backend_mode" ] || die "Invalid --backend value. Allowed: auto, wham, rpc."
   if [ "$live_only" = "true" ] && [ "$allow_cache" = "true" ]; then
     die "Do not combine --live-only with --allow-cache."
+  fi
+  if [ "$json_mode" != "true" ] && [ "$live_only" != "true" ] && [ "$allow_cache" != "true" ]; then
+    allow_cache="true"
   fi
 
   if [ "$all_mode" = "true" ]; then
@@ -3991,12 +4013,13 @@ cmd_logout() {
   local p_home
   p_home="$(profile_home "$profile")"
   [ -d "$p_home" ] || die "Profile '$profile' does not exist"
-  CODEX_HOME="$p_home" "$CODEX_BIN" logout || true
+  CODEX_HOME="$p_home" run_codex logout
   echo "Logged out profile '$profile'"
 }
 
 cmd_logout_default() {
-  "$CODEX_BIN" logout || true
+  ensure_dirs
+  CODEX_HOME="$DEFAULT_HOME" run_codex logout
   echo "Logged out default profile ($DEFAULT_HOME)"
 }
 
