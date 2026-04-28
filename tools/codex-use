@@ -65,6 +65,37 @@ run_codex() {
   "$CODEX_BIN" "$@"
 }
 
+resolve_codex_bin() {
+  if [[ "$CODEX_BIN" == */* ]]; then
+    [ -x "$CODEX_BIN" ] || die "CODEX_BIN points to '$CODEX_BIN', but it is not executable."
+    return 0
+  fi
+
+  local resolved
+  resolved="$(command -v "$CODEX_BIN" 2>/dev/null || true)"
+  if [ -n "$resolved" ] && [ -x "$resolved" ]; then
+    CODEX_BIN="$resolved"
+    return 0
+  fi
+
+  local fallback_bins=(
+    "/Applications/Codex.app/Contents/Resources/codex"
+    "/Applications/Codex.app/Contents/MacOS/codex"
+    "/opt/homebrew/bin/codex"
+    "/usr/local/bin/codex"
+    "$HOME/.local/bin/codex"
+  )
+  local candidate
+  for candidate in "${fallback_bins[@]}"; do
+    if [ -x "$candidate" ]; then
+      CODEX_BIN="$candidate"
+      return 0
+    fi
+  done
+
+  die "Could not find Codex CLI binary. Set CODEX_BIN=<absolute-path-to-codex> and retry."
+}
+
 ensure_dirs() {
   mkdir -p "$DEFAULT_HOME" "$PROFILES_ROOT" "$BACKUP_DIR"
 }
@@ -4193,6 +4224,8 @@ cmd_delete() {
 }
 
 main() {
+  resolve_codex_bin
+
   local cmd="${1:-help}"
   shift || true
   case "$cmd" in
