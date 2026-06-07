@@ -1,6 +1,6 @@
 {
-  "name": "@anewryzm/codex-use",
-  "version": "0.1.0",
+  "name": "@enriquecardoza/dex",
+  "version": "0.2.0",
   "description": "CLI to manage multiple Codex profiles and switch the active account safely.",
   "license": "MIT",
   "repository": {
@@ -12,6 +12,7 @@
     "url": "https://github.com/Anewryzm/codex-use/issues"
   },
   "bin": {
+    "dex": "tools/codex-use",
     "codex-use": "tools/codex-use",
     "cdex": "tools/codex-use"
   },

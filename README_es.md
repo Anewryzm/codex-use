@@ -1,53 +1,54 @@
-# codex-use
+# dex
 
 Script para gestionar múltiples cuentas de Codex por perfil y promover una cuenta al perfil default (`~/.codex`) que usa Codex App + Codex CLI sin `CODEX_HOME`.
 
 ## Instalación (npm)
-- `npm i -g @anewryzm/codex-use`
+- `npm i -g @enriquecardoza/dex`
 
 ## Comandos
-- Principal: `codex-use`
+- Principal: `dex`
 - Alias corto: `cdex`
+- Alias legacy: `codex-use`
 
 ## Archivo principal
 - `tools/codex-use`
 
 ## Flujo principal
 1. Guardar login por perfil:
-- `codex-use login personal`
-- `codex-use login trabajo`
+- `dex login personal`
+- `dex login trabajo`
 
 2. Cambiar cuenta activa del default:
-- `codex-use use personal`
-- `codex-use use trabajo`
-- `codex-use use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
-- `codex-use use trabajo --relaunch --from-action` (para Actions: relanza app y cierra la pestaña de Terminal en éxito)
+- `dex use personal`
+- `dex use trabajo`
+- `dex use trabajo --relaunch` (recomendado para que Codex App refresque sesión automáticamente)
+- `dex use trabajo --relaunch --from-action` (para Actions: relanza app y cierra la pestaña de Terminal en éxito)
 
 3. Ver usage/rate limits:
-- `codex-use usage`
-- `codex-use usage --json`
-- `codex-use limits trabajo --refresh`
-- `codex-use limits --all` o `codex-use limits -a` (vista compacta de límites por perfil)
+- `dex usage`
+- `dex usage --json`
+- `dex limits trabajo --refresh`
+- `dex limits --all` o `dex limits -a` (vista compacta de límites por perfil)
 
 ## Comandos disponibles
-- `codex-use login <profile>`
-- `codex-use use <profile> [--force] [--relaunch] [--from-action]`
-- `codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]`
-- `codex-use delete switch action [--platform <macos|darwin>] [--dry-run]`
-- `codex-use usage [--json]`
-- `codex-use backup [--note "..."] [--dir <path>] [--delete]`
-- `codex-use backup status [--dir <path>]`
-- `codex-use backup init [--dir <path>]`
-- `codex-use backup add remote <url> [--name <remote>] [--dir <path>]`
-- `codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]`
-- `codex-use backup restore [--dir <path>] [--relaunch] [--delete]`
-- `codex-use limits [profile|default] [--all] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]`
-- `codex-use limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]`
-- `codex-use list`
-- `codex-use whoami`
-- `codex-use status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]`
-- `codex-use logout <profile>`
-- `codex-use logout-default`
+- `dex login <profile>`
+- `dex use <profile> [--force] [--relaunch] [--from-action]`
+- `dex add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <dex|cdex|codex-use>] [--dry-run]`
+- `dex delete switch action [--platform <macos|darwin>] [--dry-run]`
+- `dex usage [--json]`
+- `dex backup [--note "..."] [--dir <path>] [--delete]`
+- `dex backup status [--dir <path>]`
+- `dex backup init [--dir <path>]`
+- `dex backup add remote <url> [--name <remote>] [--dir <path>]`
+- `dex backup push [--remote <name>] [--branch <name>] [--dir <path>]`
+- `dex backup restore [--dir <path>] [--relaunch] [--delete]`
+- `dex limits [profile|default] [--all] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]`
+- `dex limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]`
+- `dex list`
+- `dex whoami`
+- `dex status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]`
+- `dex logout <profile>`
+- `dex logout-default`
 
 ## Notas de seguridad
 - `use` crea backup automático de `~/.codex/auth.json` en `~/.codex/backups/`.
@@ -61,12 +62,12 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `limits` es live-first: API directa `wham/usage` con token del perfil y fallback a RPC (`account/rateLimits/read`).
 
 ## Diagnóstico rápido cuando "no cambia la cuenta" en la app
-1. Ejecuta `codex-use list`.
+1. Ejecuta `dex list`.
 2. Revisa la leyenda:
 - `[*]` = el perfil usa exactamente el mismo token que `~/.codex`.
 - `[~]` = mismo `account_id`, pero token/identidad distinta.
-3. Si haces switch con la app abierta, usa `codex-use use <profile> --relaunch`.
-4. Ejecuta `codex-use whoami` para ver `Active profile` además de email/plan/account.
+3. Si haces switch con la app abierta, usa `dex use <profile> --relaunch`.
+4. Ejecuta `dex whoami` para ver `Active profile` además de email/plan/account.
 
 ## Diferencia entre `whoami` y `status`
 - `whoami`: vista rápida del perfil activo en `~/.codex` (cuenta que usa la app/CLI por defecto).
@@ -114,8 +115,8 @@ Script para gestionar múltiples cuentas de Codex por perfil y promover una cuen
 - `add switch action` lee perfiles logueados desde `~/.codex-profiles` y escribe acciones de cambio por perfil en `.codex/environments/environment.toml`.
 - Soporte de plataforma por ahora: `macos` (alias: `darwin`, se escribe como `darwin` en el TOML).
 - Ejemplo:
-- `codex-use add switch action --platform macos`
+- `dex add switch action --platform macos`
 - Solo vista previa:
-- `codex-use add switch action --dry-run`
+- `dex add switch action --dry-run`
 - Eliminar acciones de switch generadas para macOS:
-- `codex-use delete switch action --platform macos`
+- `dex delete switch action --platform macos`

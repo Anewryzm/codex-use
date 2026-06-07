@@ -10,35 +10,35 @@ HISTORY_BACKUP_DIR_DEFAULT="${CODEX_HISTORY_BACKUP_DIR:-$HOME/codex-history-back
 
 usage() {
   cat <<USAGE
-codex-use - Multi-account profile manager for Codex default home
+dex - Multi-account profile manager for Codex default home
 
 Usage:
-  codex-use login <profile> [--device-auth|extra codex login flags]
-  codex-use use <profile> [--force] [--relaunch] [--from-action]
-  codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]
-  codex-use delete switch action [--platform <macos|darwin>] [--dry-run]
-  codex-use usage [--json]
-  codex-use backup [--note "..."] [--dir <path>] [--delete]
-  codex-use backup status [--dir <path>]
-  codex-use backup init [--dir <path>]
-  codex-use backup add remote <url> [--name <remote>] [--dir <path>]
-  codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]
-  codex-use backup restore [--dir <path>] [--relaunch] [--delete]
-  codex-use pricing show
-  codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
-  codex-use limits [profile|default] [--all] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]
-  codex-use limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]
-  codex-use list
-  codex-use whoami
-  codex-use status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]
-  codex-use logout <profile>
-  codex-use logout-default
+  dex login <profile> [--device-auth|extra codex login flags]
+  dex use <profile> [--force] [--relaunch] [--from-action]
+  dex add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <dex|cdex|codex-use>] [--dry-run]
+  dex delete switch action [--platform <macos|darwin>] [--dry-run]
+  dex usage [--json]
+  dex backup [--note "..."] [--dir <path>] [--delete]
+  dex backup status [--dir <path>]
+  dex backup init [--dir <path>]
+  dex backup add remote <url> [--name <remote>] [--dir <path>]
+  dex backup push [--remote <name>] [--branch <name>] [--dir <path>]
+  dex backup restore [--dir <path>] [--relaunch] [--delete]
+  dex pricing show
+  dex pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]
+  dex limits [profile|default] [--all] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]
+  dex limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]
+  dex list
+  dex whoami
+  dex status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]
+  dex logout <profile>
+  dex logout-default
 
 Core flow:
-  1) Save credentials per profile:  codex-use login personal
-  2) Switch active default account: codex-use use personal
-  3) Check historical usage:        codex-use usage
-  4) Compare profile limits:        codex-use limits --all
+  1) Save credentials per profile:  dex login personal
+  2) Switch active default account: dex use personal
+  3) Check historical usage:        dex usage
+  4) Compare profile limits:        dex limits --all
 
 Notes:
   - Default Codex App + CLI home is: $DEFAULT_HOME
@@ -657,7 +657,7 @@ function requestWham(token) {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: 'application/json',
-        'User-Agent': 'codex-use/0.2.0',
+        'User-Agent': 'dex/0.2.0',
       },
     }, (res) => {
       let body = '';
@@ -881,7 +881,7 @@ function resetText(epochSeconds) {
 (async () => {
   try {
     const init = await send('initialize', {
-      clientInfo: { name: 'codex-use', version: '0.2.0' },
+      clientInfo: { name: 'dex', version: '0.2.0' },
     });
 
     const accountResp = await readAccountWithCompat();
@@ -1042,7 +1042,7 @@ child.on('error', (err) => {
 (async () => {
   try {
     await send('initialize', {
-      clientInfo: { name: 'codex-use', version: '0.2.0' },
+      clientInfo: { name: 'dex', version: '0.2.0' },
     });
     const accountResp = await readAccountWithCompat(true);
     if (accountResp?.requiresOpenaiAuth) {
@@ -1329,7 +1329,7 @@ const envFile = process.argv[2];
 const projectName = process.argv[3] || "project";
 const platform = process.argv[4] || "darwin";
 const icon = process.argv[5] || "test";
-const commandName = process.argv[6] || "cdex";
+const commandName = process.argv[6] || "dex";
 const profilesCsv = process.argv[7] || "";
 const profiles = profilesCsv.split(",").filter(Boolean);
 
@@ -1919,16 +1919,16 @@ cmd_limits_doctor() {
         all_mode="true"
         ;;
       -h|--help)
-        echo "Usage: codex-use limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]"
+        echo "Usage: dex limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]"
         echo "Examples:"
-        echo "  codex-use limits doctor"
-        echo "  codex-use limits doctor personal"
-        echo "  codex-use limits doctor --all --backend auto"
+        echo "  dex limits doctor"
+        echo "  dex limits doctor personal"
+        echo "  dex limits doctor --all --backend auto"
         return 0
         ;;
       *)
         if [[ "$1" == --* ]]; then
-          die "Unknown option '$1'. Usage: codex-use limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]"
+          die "Unknown option '$1'. Usage: dex limits doctor [profile|--all] [--refresh] [--allow-cache] [--backend <auto|wham|rpc>]"
         fi
         if [ -n "$profile" ]; then
           die "Only one profile argument is allowed for limits doctor."
@@ -2419,12 +2419,12 @@ print_historical_usage_table() {
 print_backup_help() {
   cat <<HELP
 Usage:
-  codex-use backup [--note "..."] [--dir <path>] [--delete]
-  codex-use backup status [--dir <path>]
-  codex-use backup init [--dir <path>]
-  codex-use backup add remote <url> [--name <remote>] [--dir <path>]
-  codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]
-  codex-use backup restore [--dir <path>] [--relaunch] [--delete]
+  dex backup [--note "..."] [--dir <path>] [--delete]
+  dex backup status [--dir <path>]
+  dex backup init [--dir <path>]
+  dex backup add remote <url> [--name <remote>] [--dir <path>]
+  dex backup push [--remote <name>] [--branch <name>] [--dir <path>]
+  dex backup restore [--dir <path>] [--relaunch] [--delete]
 
 Notes:
   - Default backup repo dir: $HISTORY_BACKUP_DIR_DEFAULT
@@ -2922,7 +2922,7 @@ cmd_backup_status() {
         return 0
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use backup status [--dir <path>]"
+        die "Unknown option '$1'. Usage: dex backup status [--dir <path>]"
         ;;
     esac
   done
@@ -3037,7 +3037,7 @@ cmd_backup_init() {
         return 0
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use backup init [--dir <path>]"
+        die "Unknown option '$1'. Usage: dex backup init [--dir <path>]"
         ;;
     esac
   done
@@ -3046,7 +3046,7 @@ cmd_backup_init() {
   ensure_backup_gitignore "$repo_dir"
 
   echo "Backup repo ready: $repo_dir"
-  echo "Tip: run 'codex-use backup --dir \"$repo_dir\"' to create the first snapshot commit."
+  echo "Tip: run 'dex backup --dir \"$repo_dir\"' to create the first snapshot commit."
 }
 
 cmd_backup_run() {
@@ -3077,7 +3077,7 @@ cmd_backup_run() {
         return 0
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use backup [--note \"...\"] [--dir <path>] [--delete]"
+        die "Unknown option '$1'. Usage: dex backup [--note \"...\"] [--dir <path>] [--delete]"
         ;;
     esac
   done
@@ -3187,7 +3187,7 @@ cmd_backup_add_remote() {
   ensure_dirs
   local url="${1:-}"
   shift || true
-  [ -n "$url" ] || die "Usage: codex-use backup add remote <url> [--name <remote>] [--dir <path>]"
+  [ -n "$url" ] || die "Usage: dex backup add remote <url> [--name <remote>] [--dir <path>]"
 
   local repo_dir remote_name
   repo_dir="$(backup_default_repo_dir)"
@@ -3206,7 +3206,7 @@ cmd_backup_add_remote() {
         shift 2
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use backup add remote <url> [--name <remote>] [--dir <path>]"
+        die "Unknown option '$1'. Usage: dex backup add remote <url> [--name <remote>] [--dir <path>]"
         ;;
     esac
   done
@@ -3252,13 +3252,13 @@ cmd_backup_push() {
         return 0
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use backup push [--remote <name>] [--branch <name>] [--dir <path>]"
+        die "Unknown option '$1'. Usage: dex backup push [--remote <name>] [--branch <name>] [--dir <path>]"
         ;;
     esac
   done
 
-  [ -d "$repo_dir/.git" ] || die "No git repo found at $repo_dir. Run: codex-use backup init [--dir <path>]"
-  git -C "$repo_dir" rev-parse --verify HEAD >/dev/null 2>&1 || die "No commits found in $repo_dir. Run: codex-use backup first."
+  [ -d "$repo_dir/.git" ] || die "No git repo found at $repo_dir. Run: dex backup init [--dir <path>]"
+  git -C "$repo_dir" rev-parse --verify HEAD >/dev/null 2>&1 || die "No commits found in $repo_dir. Run: dex backup first."
   git -C "$repo_dir" remote get-url "$remote_name" >/dev/null 2>&1 || die "Remote '$remote_name' is not configured in $repo_dir."
 
   local current_branch
@@ -3311,7 +3311,7 @@ cmd_backup_restore() {
         return 0
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use backup restore [--dir <path>] [--relaunch] [--delete]"
+        die "Unknown option '$1'. Usage: dex backup restore [--dir <path>] [--relaunch] [--delete]"
         ;;
     esac
   done
@@ -3374,7 +3374,7 @@ cmd_backup() {
       local target="${1:-}"
       shift || true
       if [ "$target" != "remote" ]; then
-        die "Usage: codex-use backup add remote <url> [--name <remote>] [--dir <path>]"
+        die "Usage: dex backup add remote <url> [--name <remote>] [--dir <path>]"
       fi
       cmd_backup_add_remote "$@"
       ;;
@@ -3388,7 +3388,7 @@ cmd_backup() {
       print_backup_help
       ;;
     *)
-      die "Unknown backup subcommand '$sub'. Run: codex-use backup --help"
+      die "Unknown backup subcommand '$sub'. Run: dex backup --help"
       ;;
   esac
 }
@@ -3401,7 +3401,7 @@ cmd_pricing() {
   case "$sub" in
     show)
       if [ "$#" -gt 0 ]; then
-        die "Usage: codex-use pricing show"
+        die "Usage: dex pricing show"
       fi
       local pricing_path
       pricing_path="$(pricing_file)"
@@ -3462,7 +3462,7 @@ NODE
     set)
       local model="${1:-}"
       shift || true
-      [ -n "$model" ] || die "Usage: codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+      [ -n "$model" ] || die "Usage: dex pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
 
       local in_val="" cache_val="" out_val=""
       while [ "$#" -gt 0 ]; do
@@ -3480,7 +3480,7 @@ NODE
             shift 2
             ;;
           *)
-            die "Unknown option '$1'. Usage: codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+            die "Unknown option '$1'. Usage: dex pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
             ;;
         esac
       done
@@ -3558,11 +3558,11 @@ NODE
       ;;
     help|-h|--help)
       echo "Usage:"
-      echo "  codex-use pricing show"
-      echo "  codex-use pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
+      echo "  dex pricing show"
+      echo "  dex pricing set <model> [--in <usd_per_m>] [--cache <usd_per_m>] [--out <usd_per_m>]"
       ;;
     *)
-      die "Unknown pricing subcommand '$sub'. Use: codex-use pricing show|set"
+      die "Unknown pricing subcommand '$sub'. Use: dex pricing show|set"
       ;;
   esac
 }
@@ -3633,7 +3633,7 @@ print_usage_table_row_for_home() {
 cmd_login() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codex-use login <profile> [extra login flags]"
+  [ -n "$profile" ] || die "Usage: dex login <profile> [extra login flags]"
   validate_profile "$profile"
   ensure_dirs
 
@@ -3652,7 +3652,7 @@ cmd_login() {
 cmd_use() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codex-use use <profile> [--force] [--relaunch] [--from-action]"
+  [ -n "$profile" ] || die "Usage: dex use <profile> [--force] [--relaunch] [--from-action]"
   validate_profile "$profile"
   ensure_dirs
 
@@ -3671,7 +3671,7 @@ cmd_use() {
         from_action="true"
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use use <profile> [--force] [--relaunch] [--from-action]"
+        die "Unknown option '$1'. Usage: dex use <profile> [--force] [--relaunch] [--from-action]"
         ;;
     esac
     shift
@@ -3682,7 +3682,7 @@ cmd_use() {
   src="$(auth_file "$p_home")"
   dst="$(auth_file "$DEFAULT_HOME")"
 
-  [ -f "$src" ] || die "Profile '$profile' has no auth.json. Run: codex-use login $profile"
+  [ -f "$src" ] || die "Profile '$profile' has no auth.json. Run: dex login $profile"
 
   if is_codex_app_running; then
     if [ "$relaunch" = "true" ]; then
@@ -3691,7 +3691,7 @@ cmd_use() {
         die "Could not close Codex App cleanly after retries. Close it manually and retry."
       fi
     elif [ "$force" != "true" ]; then
-      die "Codex App is running. Close it first, or use 'codex-use use $profile --relaunch' (recommended) or '--force' if you accept in-flight risk."
+      die "Codex App is running. Close it first, or use 'dex use $profile --relaunch' (recommended) or '--force' if you accept in-flight risk."
     fi
   fi
 
@@ -3792,21 +3792,21 @@ cmd_usage() {
         ;;
       -h|--help)
         if [ "$command_mode" = "usage" ]; then
-          echo "Usage: codex-use usage [--json]"
+          echo "Usage: dex usage [--json]"
           echo "Examples:"
-          echo "  codex-use usage"
-          echo "  codex-use usage --json"
+          echo "  dex usage"
+          echo "  dex usage --json"
         else
-          echo "Usage: codex-use limits [profile|default] [--all|-a] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
+          echo "Usage: dex limits [profile|default] [--all|-a] [--json] [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
           echo "Examples:"
-          echo "  codex-use limits"
-          echo "  codex-use limits trabajo"
-          echo "  codex-use limits default --json"
-          echo "  codex-use limits --all"
-          echo "  codex-use limits -a"
-          echo "  codex-use limits --all --backend wham"
-          echo "  codex-use limits --all --allow-cache"
-          echo "  codex-use limits doctor --all"
+          echo "  dex limits"
+          echo "  dex limits trabajo"
+          echo "  dex limits default --json"
+          echo "  dex limits --all"
+          echo "  dex limits -a"
+          echo "  dex limits --all --backend wham"
+          echo "  dex limits --all --allow-cache"
+          echo "  dex limits doctor --all"
         fi
         return 0
         ;;
@@ -3959,7 +3959,7 @@ cmd_list() {
   done
 
   if [ "$found" = "false" ]; then
-    echo "No profiles yet. Create one with: codex-use login <profile>"
+    echo "No profiles yet. Create one with: dex login <profile>"
   fi
 
   echo "Legend: '*' means exact same auth token as current default ~/.codex/auth.json"
@@ -3983,7 +3983,7 @@ cmd_whoami() {
 cmd_status() {
   local profile="${1:-}"
   shift || true
-  [ -n "$profile" ] || die "Usage: codex-use status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
+  [ -n "$profile" ] || die "Usage: dex status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
   validate_profile "$profile"
 
   local refresh_mode="false"
@@ -4007,7 +4007,7 @@ cmd_status() {
         [ -n "$backend_mode" ] || die "Missing value for --backend (allowed: auto, wham, rpc)"
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
+        die "Unknown option '$1'. Usage: dex status <profile> [--refresh] [--live-only] [--allow-cache] [--backend <auto|wham|rpc>]"
         ;;
     esac
     shift
@@ -4039,7 +4039,7 @@ cmd_status() {
 
 cmd_logout() {
   local profile="${1:-}"
-  [ -n "$profile" ] || die "Usage: codex-use logout <profile>"
+  [ -n "$profile" ] || die "Usage: dex logout <profile>"
   validate_profile "$profile"
   local p_home
   p_home="$(profile_home "$profile")"
@@ -4060,14 +4060,14 @@ cmd_add() {
   shift 2 || true
 
   if [ "$subject" != "switch" ] || [ "$target" != "action" ]; then
-    die "Usage: codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]"
+    die "Usage: dex add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <dex|cdex|codex-use>] [--dry-run]"
   fi
 
   ensure_dirs
 
   local platform_input="macos"
   local icon="test"
-  local command_name="cdex"
+  local command_name="dex"
   local dry_run="false"
   local project_dir="$PWD"
 
@@ -4098,11 +4098,11 @@ cmd_add() {
         shift
         ;;
       -h|--help)
-        echo "Usage: codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--project-dir <dir>] [--dry-run]"
+        echo "Usage: dex add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <dex|cdex|codex-use>] [--project-dir <dir>] [--dry-run]"
         return 0
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <cdex|codex-use>] [--dry-run]"
+        die "Unknown option '$1'. Usage: dex add switch action [--platform <macos|darwin>] [--icon <icon>] [--command-name <dex|cdex|codex-use>] [--dry-run]"
         ;;
     esac
   done
@@ -4119,7 +4119,7 @@ cmd_add() {
     profiles+=("$p")
   done < <(collect_profiles_with_auth)
 
-  [ "${#profiles[@]}" -gt 0 ] || die "No profiles with auth.json found in $PROFILES_ROOT. Run: codex-use login <profile>"
+  [ "${#profiles[@]}" -gt 0 ] || die "No profiles with auth.json found in $PROFILES_ROOT. Run: dex login <profile>"
 
   local profiles_csv
   profiles_csv="$(IFS=,; echo "${profiles[*]}")"
@@ -4161,7 +4161,7 @@ cmd_delete() {
   shift 2 || true
 
   if [ "$subject" != "switch" ] || [ "$target" != "action" ]; then
-    die "Usage: codex-use delete switch action [--platform <macos|darwin>] [--project-dir <dir>] [--dry-run]"
+    die "Usage: dex delete switch action [--platform <macos|darwin>] [--project-dir <dir>] [--dry-run]"
   fi
 
   local platform_input="macos"
@@ -4185,11 +4185,11 @@ cmd_delete() {
         shift
         ;;
       -h|--help)
-        echo "Usage: codex-use delete switch action [--platform <macos|darwin>] [--project-dir <dir>] [--dry-run]"
+        echo "Usage: dex delete switch action [--platform <macos|darwin>] [--project-dir <dir>] [--dry-run]"
         return 0
         ;;
       *)
-        die "Unknown option '$1'. Usage: codex-use delete switch action [--platform <macos|darwin>] [--dry-run]"
+        die "Unknown option '$1'. Usage: dex delete switch action [--platform <macos|darwin>] [--dry-run]"
         ;;
     esac
   done
@@ -4243,7 +4243,7 @@ main() {
     add) cmd_add "$@" ;;
     delete) cmd_delete "$@" ;;
     help|-h|--help) usage ;;
-    *) die "Unknown command '$cmd'. Run: codex-use help" ;;
+    *) die "Unknown command '$cmd'. Run: dex help" ;;
   esac
 }
 
